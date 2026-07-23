@@ -1,0 +1,43 @@
+# Visual Studio Build-Ausgaben
+x64/
+x86/
+Win32/
+Debug/
+Release/
+shutdown-service/x64/
+shutdown-service/Debug/
+shutdown-service/Release/
+
+# Visual Studio temporäre Dateien
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.VC.opendb
+.vs/
+
+# Compiler-Ausgaben
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.idb
+*.ipdb
+*.iobj
+*.tlog/
+
+# Laufzeit-Ausgaben
+*.dll
+*.exe
+!installer/build.bat
+
+# Logdateien
+*.log
+wgcp_debug.log
+
+# Backup/temp
+*.bak
+*.tmp
+Thumbs.db
