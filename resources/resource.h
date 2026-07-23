@@ -1,0 +1,4 @@
+#pragma once
+
+#define IDB_WIREGUARD_CONNECTED    101
+#define IDB_WIREGUARD_DISCONNECTED 102
