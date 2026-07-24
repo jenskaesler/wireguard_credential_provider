@@ -205,23 +205,15 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
         File "content\configure.reg"
         File "content\img\wireguard.ico"
 
-        ; DLL nach System32 kopieren
+        ; DLL nach System32 kopieren via robocopy (64-Bit Prozess, kein WOW64 Redirect)
         DetailPrint "Kopiere DLL nach $9..."
-        SetOverwrite on
-        CopyFiles /SILENT "$INSTDIR\WireGuardCredentialProvider.dll" "$9\WireGuardCredentialProvider.dll"
+        ExecWait 'robocopy.exe "$INSTDIR" "$9" WireGuardCredentialProvider.dll /IS /IT /NJH /NJS /NFL /NDL'
 
-        ; Prüfen ob Kopieren erfolgreich war
-        ${IfNot} ${FileExists} "$9\WireGuardCredentialProvider.dll"
-            ; Fallback: direkt mit File-Befehl
-            SetOutPath "$9"
-            File "content\WireGuardCredentialProvider.dll"
-            SetOutPath "$INSTDIR"
-        ${EndIf}
-
-        ; Nochmal prüfen
-        ${IfNot} ${FileExists} "$9\WireGuardCredentialProvider.dll"
+        ; Existenz via dir-Befehl prüfen (umgeht WOW64 FileExists-Problem)
+        ExecWait 'cmd.exe /c if not exist "$9\WireGuardCredentialProvider.dll" exit 1' $R8
+        ${If} $R8 != 0
             ${EnableX64FSRedirection}
-            MessageBox MB_OK|MB_ICONSTOP "Konnte DLL nicht nach System32 kopieren.$\nBitte stellen Sie sicher dass keine andere Anwendung die DLL gesperrt hat,$\nund starten Sie den Installer erneut."
+            MessageBox MB_OK|MB_ICONSTOP "Konnte DLL nicht nach $9 kopieren.$\nBitte als Administrator starten."
             Abort
         ${EndIf}
 
@@ -235,8 +227,8 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
             DetailPrint "Credential Provider registriert."
         ${EndIf}
 
-        ; Shutdown-Service
-        CopyFiles /SILENT "$INSTDIR\WireGuardShutdownService.exe" "$9\WireGuardShutdownService.exe"
+        ; Shutdown-Service via robocopy nach System32
+        ExecWait 'robocopy.exe "$INSTDIR" "$9" WireGuardShutdownService.exe /NJH /NJS /NFL /NDL'
         ExecWait '"$9\WireGuardShutdownService.exe" /install'
         DetailPrint "$(MSG_SVC_START)"
 
