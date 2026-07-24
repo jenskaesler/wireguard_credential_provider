@@ -186,6 +186,10 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
         ; System32-Pfad explizit setzen (verhindert SysWOW64-Umleitung)
         StrCpy $9 "$WINDIR\System32"
 
+        ; 64-Bit Filesystem-Redirector deaktivieren
+        ; (NSIS ist 32-Bit, ohne dies landet alles in SysWOW64)
+        ${DisableX64FSRedirection}
+
         DetailPrint "$(MSG_SVC_STOP)"
         Call StopService
 
@@ -208,7 +212,7 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
 
         ; Prüfen ob Kopieren erfolgreich war
         ${IfNot} ${FileExists} "$9\WireGuardCredentialProvider.dll"
-            ; Fallback: direkt mit StrCpy via File-Befehl
+            ; Fallback: direkt mit File-Befehl
             SetOutPath "$9"
             File "content\WireGuardCredentialProvider.dll"
             SetOutPath "$INSTDIR"
@@ -216,6 +220,7 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
 
         ; Nochmal prüfen
         ${IfNot} ${FileExists} "$9\WireGuardCredentialProvider.dll"
+            ${EnableX64FSRedirection}
             MessageBox MB_OK|MB_ICONSTOP "Konnte DLL nicht nach System32 kopieren.$\nBitte stellen Sie sicher dass keine andere Anwendung die DLL gesperrt hat,$\nund starten Sie den Installer erneut."
             Abort
         ${EndIf}
@@ -224,6 +229,7 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
         DetailPrint "$(MSG_REGSVR)"
         ExecWait 'regsvr32.exe /s "$9\WireGuardCredentialProvider.dll"' $R9
         ${If} $R9 != 0
+            ${EnableX64FSRedirection}
             MessageBox MB_OK|MB_ICONSTOP "Registrierung fehlgeschlagen (Exit-Code $R9).$\nPfad: $9\WireGuardCredentialProvider.dll"
         ${Else}
             DetailPrint "Credential Provider registriert."
@@ -233,6 +239,9 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
         CopyFiles /SILENT "$INSTDIR\WireGuardShutdownService.exe" "$9\WireGuardShutdownService.exe"
         ExecWait '"$9\WireGuardShutdownService.exe" /install'
         DetailPrint "$(MSG_SVC_START)"
+
+        ; Filesystem-Redirector wieder aktivieren
+        ${EnableX64FSRedirection}
 
         WriteUninstaller "$INSTDIR\Uninstall.exe"
 
@@ -304,6 +313,7 @@ SectionGroup /e "un.${APPNAME}" SecGrpUninstall
         SetRegView 64
 
         StrCpy $9 "$WINDIR\System32"
+        ${DisableX64FSRedirection}
 
         DetailPrint "$(MSG_SVC_STOP)"
         ExecWait '"$9\WireGuardShutdownService.exe" /uninstall'
@@ -312,6 +322,8 @@ SectionGroup /e "un.${APPNAME}" SecGrpUninstall
         DetailPrint "$(MSG_UNREG)"
         ExecWait 'regsvr32.exe /s /u "$9\WireGuardCredentialProvider.dll"'
         Delete /rebootok "$9\WireGuardCredentialProvider.dll"
+
+        ${EnableX64FSRedirection}
 
         RMDir /r "$INSTDIR"
 
