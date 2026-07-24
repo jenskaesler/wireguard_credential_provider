@@ -183,24 +183,36 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
         SetOverwrite on
         SetOutPath "$INSTDIR"
 
+        ; System32-Pfad explizit setzen (verhindert SysWOW64-Umleitung)
+        StrCpy $9 "$WINDIR\System32"
+
         DetailPrint "$(MSG_SVC_STOP)"
         Call StopService
 
-        DetailPrint "$(MSG_REGSVR)"
-        ExecWait 'regsvr32.exe /s /u "$SYSDIR\WireGuardCredentialProvider.dll"'
+        ; Deregistrieren falls vorhanden
+        ExecWait 'regsvr32.exe /s /u "$9\WireGuardCredentialProvider.dll"'
 
+        ; Dateien ins Installationsverzeichnis kopieren
         File "content\WireGuardCredentialProvider.dll"
         File "content\WireGuardShutdownService.exe"
         File "content\configure.reg"
-
         File "content\img\wireguard.ico"
 
-        CopyFiles /SILENT "$INSTDIR\WireGuardCredentialProvider.dll" "$SYSDIR\WireGuardCredentialProvider.dll"
-        ExecWait 'regsvr32.exe /s "$SYSDIR\WireGuardCredentialProvider.dll"'
-        DetailPrint "Credential Provider registriert."
+        ; DLL nach System32 kopieren und registrieren
+        DetailPrint "Kopiere DLL nach $9..."
+        CopyFiles /SILENT "$INSTDIR\WireGuardCredentialProvider.dll" "$9\WireGuardCredentialProvider.dll"
 
-        CopyFiles /SILENT "$INSTDIR\WireGuardShutdownService.exe" "$SYSDIR\WireGuardShutdownService.exe"
-        ExecWait '"$SYSDIR\WireGuardShutdownService.exe" /install'
+        DetailPrint "$(MSG_REGSVR)"
+        ExecWait 'regsvr32.exe /s "$9\WireGuardCredentialProvider.dll"' $R9
+        ${If} $R9 != 0
+            MessageBox MB_OK|MB_ICONSTOP "Registrierung fehlgeschlagen (Exit-Code $R9).$\nPfad: $9\WireGuardCredentialProvider.dll"
+        ${Else}
+            DetailPrint "Credential Provider registriert."
+        ${EndIf}
+
+        ; Shutdown-Service installieren
+        CopyFiles /SILENT "$INSTDIR\WireGuardShutdownService.exe" "$9\WireGuardShutdownService.exe"
+        ExecWait '"$9\WireGuardShutdownService.exe" /install'
         DetailPrint "$(MSG_SVC_START)"
 
         WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -272,13 +284,15 @@ SectionGroup /e "un.${APPNAME}" SecGrpUninstall
         SectionIn RO
         SetRegView 64
 
+        StrCpy $9 "$WINDIR\System32"
+
         DetailPrint "$(MSG_SVC_STOP)"
-        ExecWait '"$SYSDIR\WireGuardShutdownService.exe" /uninstall'
-        Delete /rebootok "$SYSDIR\WireGuardShutdownService.exe"
+        ExecWait '"$9\WireGuardShutdownService.exe" /uninstall'
+        Delete /rebootok "$9\WireGuardShutdownService.exe"
 
         DetailPrint "$(MSG_UNREG)"
-        ExecWait 'regsvr32.exe /s /u "$SYSDIR\WireGuardCredentialProvider.dll"'
-        Delete /rebootok "$SYSDIR\WireGuardCredentialProvider.dll"
+        ExecWait 'regsvr32.exe /s /u "$9\WireGuardCredentialProvider.dll"'
+        Delete /rebootok "$9\WireGuardCredentialProvider.dll"
 
         RMDir /r "$INSTDIR"
 
