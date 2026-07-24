@@ -99,18 +99,11 @@ private:
     HANDLE          _hTimerThread;
     volatile bool   _bStopTimer;
 
-    // Hintergrund-Thread für Shutdown-Erkennung
-    HANDLE  _hShutdownThread;
-    HWND    _hShutdownWnd;
 
     static DWORD WINAPI _TimerThreadProc(LPVOID lpParam);
-    static DWORD WINAPI _ShutdownThreadProc(LPVOID lpParam);
-    static LRESULT CALLBACK _ShutdownWndProc(HWND hWnd, UINT uMsg,
-                                              WPARAM wParam, LPARAM lParam);
 
     void    _LoadConfig();
     void    _LoadProfiles();
-    void    _DisconnectAllOnBoot();
     void    _RefreshStatus();
     void    _UpdateFields();
     HRESULT _LoadBitmap(PCWSTR pwszPath, HBITMAP* phbmp);

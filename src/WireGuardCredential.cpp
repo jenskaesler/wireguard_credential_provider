@@ -11,7 +11,7 @@ WireGuardCredential::WireGuardCredential()
     : _cRef(1), _cpus(CPUS_INVALID), _pCredProvCredentialEvents(nullptr)
     , _nProfiles(0), _dwSelectedProfile(0), _bConnected(false)
     , _bSelected(false), _hTimerThread(nullptr), _bStopTimer(false)
-    , _pProvider(nullptr), _hShutdownThread(nullptr), _hShutdownWnd(nullptr)
+    , _pProvider(nullptr)
 {
     ZeroMemory(_rgCredProvFieldDescriptors, sizeof(_rgCredProvFieldDescriptors));
     ZeroMemory(_rgFieldStatePairs,          sizeof(_rgFieldStatePairs));
@@ -33,18 +33,6 @@ WireGuardCredential::~WireGuardCredential()
         WaitForSingleObject(_hTimerThread, 3000);
         CloseHandle(_hTimerThread);
         _hTimerThread = nullptr;
-    }
-    // Shutdown-Listener-Fenster schliessen
-    if (_hShutdownWnd)
-    {
-        PostMessageW(_hShutdownWnd, WM_CLOSE, 0, 0);
-        _hShutdownWnd = nullptr;
-    }
-    if (_hShutdownThread)
-    {
-        WaitForSingleObject(_hShutdownThread, 3000);
-        CloseHandle(_hShutdownThread);
-        _hShutdownThread = nullptr;
     }
     for (int i = 0; i < FI_NUM_FIELDS; i++)
         CoTaskMemFree(_rgCredProvFieldDescriptors[i].pszLabel);
@@ -90,12 +78,6 @@ HRESULT WireGuardCredential::Initialize(
 
         _RefreshStatus();
 
-        // Shutdown-Listener starten
-        _hShutdownThread = CreateThread(nullptr, 0, _ShutdownThreadProc, this, 0, nullptr);
-        if (_hShutdownThread)
-            LOG_DEBUG(L"Shutdown-Listener gestartet");
-        else
-            LOG_WARN(L"Shutdown-Listener konnte nicht gestartet werden");
     }
     else
     {
@@ -380,140 +362,6 @@ STDMETHODIMP WireGuardCredential::SetDeselected()
     return S_OK;
 }
 
-// ---------------------------------------------------------------------------
-// _DisconnectAllOnBoot
-// Wird bei jedem Initialize aufgerufen. Trennt alle Tunnel die vom letzten
-// Shutdown uebrig geblieben sind. HWND_MESSAGE empfaengt WM_ENDSESSION
-// nicht zuverlaessig, daher sauberer Ansatz: beim naechsten Boot trennen.
-// ---------------------------------------------------------------------------
-void WireGuardCredential::_DisconnectAllOnBoot()
-{
-    bool bFoundActive = false;
-    for (int i = 0; i < _nProfiles; i++)
-    {
-        if (WGIsTunnelConnected(_rgProfiles[i]))
-        {
-            if (!bFoundActive)
-            {
-                LOG_DEBUG(L"Boot-Cleanup: Aktive Tunnel vom letzten Shutdown gefunden");
-                bFoundActive = true;
-            }
-            WCHAR d[MAX_PATH_WGCP + 32] = {};
-            StringCchPrintfW(d, ARRAYSIZE(d),
-                             L"Boot-Cleanup: Trenne '%s'", _rgProfiles[i]);
-            LOG_DEBUG(d);
-            WGDisconnect(_wszExePath, _rgProfiles[i]);
-            // Kurz warten bis Service gestoppt
-            for (int j = 0; j < 10; j++)
-            {
-                Sleep(300);
-                if (!WGIsTunnelConnected(_rgProfiles[i])) break;
-            }
-        }
-    }
-    if (bFoundActive)
-        LOG_DEBUG(L"Boot-Cleanup: Abgeschlossen");
-    else
-        LOG_DEBUG(L"Boot-Cleanup: Keine aktiven Tunnel gefunden");
-}
-
-// ---------------------------------------------------------------------------
-// Shutdown-Listener
-// ---------------------------------------------------------------------------
-
-// Fensterprozedur - laeuft im Shutdown-Thread
-LRESULT CALLBACK WireGuardCredential::_ShutdownWndProc(
-    HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
-{
-    if (uMsg == WM_QUERYENDSESSION)
-    {
-        // Shutdown ankuendigen - wir erlauben ihn immer
-        LOG_DEBUG(L"WM_QUERYENDSESSION empfangen");
-        return TRUE;
-    }
-
-    if (uMsg == WM_ENDSESSION && wParam)
-    {
-        LOG_DEBUG(L"WM_ENDSESSION: trenne aktive Tunnel");
-
-        // Credential-Objekt aus GWLP_USERDATA holen
-        WireGuardCredential* pThis = reinterpret_cast<WireGuardCredential*>(
-            GetWindowLongPtrW(hWnd, GWLP_USERDATA));
-
-        if (pThis && pThis->_nProfiles > 0)
-        {
-            // Alle verbundenen Tunnel trennen
-            for (int i = 0; i < pThis->_nProfiles; i++)
-            {
-                if (WGIsTunnelConnected(pThis->_rgProfiles[i]))
-                {
-                    WCHAR d[MAX_PATH_WGCP + 32] = {};
-                    StringCchPrintfW(d, ARRAYSIZE(d),
-                                     L"Shutdown: Trenne Tunnel '%s'",
-                                     pThis->_rgProfiles[i]);
-                    LOG_DEBUG(d);
-                    WGDisconnect(pThis->_wszExePath, pThis->_rgProfiles[i]);
-                }
-            }
-            LOG_DEBUG(L"Shutdown: Alle Tunnel getrennt");
-        }
-        return 0;
-    }
-
-    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
-}
-
-// Thread der das Fenster erstellt und die Message-Loop betreibt
-DWORD WINAPI WireGuardCredential::_ShutdownThreadProc(LPVOID lpParam)
-{
-    WireGuardCredential* pThis = static_cast<WireGuardCredential*>(lpParam);
-
-    // Fensterklasse registrieren
-    WNDCLASSEXW wc = { sizeof(wc) };
-    wc.lpfnWndProc   = _ShutdownWndProc;
-    wc.hInstance     = GetModuleHandleW(nullptr);
-    wc.lpszClassName = L"WGCPShutdownListener";
-    RegisterClassExW(&wc);
-
-    // Top-Level Fenster (nicht HWND_MESSAGE!) - nur so kommt WM_ENDSESSION an
-    // Fenster ist 0x0 Pixel gross und nicht sichtbar
-    HWND hWnd = CreateWindowExW(
-        0, L"WGCPShutdownListener", L"",
-        WS_POPUP,           // Kein Rahmen, kein Titel
-        0, 0, 0, 0,         // Position und Groesse: 0
-        nullptr, nullptr,
-        GetModuleHandleW(nullptr), nullptr);
-
-    if (!hWnd)
-    {
-        WCHAR e[64] = {};
-        StringCchPrintfW(e, 64, L"Shutdown-Fenster err=%lu", GetLastError());
-        LOG_WARN(e);
-        return 1;
-    }
-
-    // Credential-Zeiger im Fenster speichern
-    SetWindowLongPtrW(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pThis));
-    pThis->_hShutdownWnd = hWnd;
-
-    // Fenster explizit versteckt lassen
-    ShowWindow(hWnd, SW_HIDE);
-
-    LOG_DEBUG(L"Shutdown-Listener Fenster erstellt (Top-Level, versteckt)");
-
-    // Message-Loop
-    MSG msg = {};
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0)
-    {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-
-    DestroyWindow(hWnd);
-    UnregisterClassW(L"WGCPShutdownListener", GetModuleHandleW(nullptr));
-    LOG_DEBUG(L"Shutdown-Listener beendet");
-    return 0;
-}
 
 // ---------------------------------------------------------------------------
 // Timer-Thread: alle 5 Sekunden Status + Traffic aktualisieren
