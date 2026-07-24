@@ -232,18 +232,32 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
         SectionIn 1
         SetRegView 64
 
+        ; InstallDir und LogVerzeichnis immer setzen/aktualisieren
+        WriteRegStr HKLM "${REG_WGCP}" "InstallDir" "$INSTDIR"
+        CreateDirectory "$INSTDIR\logs"
+
+        ; Konfigurationswerte nur bei Erstinstallation schreiben
+        ; (vorhandene Werte werden nicht ueberschrieben)
         ClearErrors
         ReadRegStr $R0 HKLM "${REG_WGCP}" "ExePath"
         ${If} $R0 == ""
-            ExecWait 'reg import "$INSTDIR\configure.reg"'
-            DetailPrint "Standard-Konfiguration importiert."
+            DetailPrint "Schreibe Standard-Konfiguration..."
+
+            WriteRegStr   HKLM "${REG_WGCP}" "ExePath"          "$PROGRAMFILES64\WireGuard\wireguard.exe"
+            WriteRegStr   HKLM "${REG_WGCP}" "WgExePath"        "$PROGRAMFILES64\WireGuard\wg.exe"
+            WriteRegStr   HKLM "${REG_WGCP}" "TileLabel"        "WireGuard VPN"
+            WriteRegStr   HKLM "${REG_WGCP}" "IconConnected"    ""
+            WriteRegStr   HKLM "${REG_WGCP}" "IconDisconnected" ""
+            WriteRegStr   HKLM "${REG_WGCP}" "LogPath"          ""
+            WriteRegDWORD HKLM "${REG_WGCP}" "LogLevel"         1
+            WriteRegDWORD HKLM "${REG_WGCP}" "LogRetentionDays" 7
+
+            DetailPrint "Standard-Konfiguration geschrieben."
         ${Else}
-            DetailPrint "Vorhandene Konfiguration beibehalten."
+            DetailPrint "Vorhandene Konfiguration beibehalten (ExePath: $R0)."
         ${EndIf}
 
-        WriteRegStr HKLM "${REG_WGCP}" "InstallDir" "$INSTDIR"
-        CreateDirectory "$INSTDIR\logs"
-        DetailPrint "Log-Verzeichnis erstellt: $INSTDIR\logs"
+        DetailPrint "Log-Verzeichnis: $INSTDIR\logs"
 
     SectionEnd
 
