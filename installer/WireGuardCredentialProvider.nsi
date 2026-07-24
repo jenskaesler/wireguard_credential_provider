@@ -145,6 +145,10 @@ RequestExecutionLevel admin
 ShowInstDetails   show
 ShowUninstDetails show
 
+; UAC-Manifest explizit einbetten (erzwingt Admin-Prompt bei Start)
+ManifestDPIAware true
+ManifestSupportedOS all
+
 !define MUI_LANGDLL_ALLLANGUAGES
 !define MUI_LANGDLL_REGISTRY_ROOT      "HKLM"
 !define MUI_LANGDLL_REGISTRY_KEY       "${REG_APP}"

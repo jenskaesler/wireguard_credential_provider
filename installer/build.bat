@@ -1,15 +1,18 @@
 @echo off
 :: ============================================================
-:: WireGuard Credential Provider – Installer Build-Script
-::
-:: Voraussetzungen:
-::   - NSIS 3.x in PATH oder unter C:\Program Files (x86)\NSIS\
-::   - nsProcess Plugin in NSIS\Plugins\x86-unicode\
-::   - SimpleSC Plugin in NSIS\Plugins\x86-unicode\
-::   - Visual Studio Build (Release|x64) bereits durchgeführt
+:: WireGuard Credential Provider - Installer Build-Script
 :: ============================================================
 
 setlocal EnableDelayedExpansion
+
+:: ---- Admin-Check (nur relevant wenn build.bat selbst Installer-Tests ausfuehrt) ----
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [INFO] Nicht als Administrator gestartet.
+    echo        build.bat selbst benoetigt keine Admin-Rechte.
+    echo        Der fertige Installer fragt beim Start nach UAC-Erhoehung.
+    echo.
+)
 
 echo.
 echo ============================================================
@@ -115,6 +118,9 @@ echo  Installer erfolgreich erstellt:
 echo  !NAME!
 echo  Groesse: !SIZE! Bytes
 echo  Pfad:    %OUT_FILE%
+echo.
+echo  HINWEIS: Der Installer muss als Administrator ausgefuehrt
+echo  werden (UAC-Abfrage erscheint automatisch beim Start).
 echo ============================================================
 echo.
 pause
