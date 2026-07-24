@@ -189,19 +189,38 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
         DetailPrint "$(MSG_SVC_STOP)"
         Call StopService
 
-        ; Deregistrieren falls vorhanden
+        ; LogonUI beenden damit DLL-Sperre aufgehoben wird (Windows startet es automatisch neu)
+        DetailPrint "Bereite Installation vor..."
         ExecWait 'regsvr32.exe /s /u "$9\WireGuardCredentialProvider.dll"'
+        ExecWait 'taskkill.exe /F /IM LogonUI.exe'
+        Sleep 1500
 
-        ; Dateien ins Installationsverzeichnis kopieren
+        ; Dateien ins Installationsverzeichnis
         File "content\WireGuardCredentialProvider.dll"
         File "content\WireGuardShutdownService.exe"
         File "content\configure.reg"
         File "content\img\wireguard.ico"
 
-        ; DLL nach System32 kopieren und registrieren
+        ; DLL nach System32 kopieren
         DetailPrint "Kopiere DLL nach $9..."
+        SetOverwrite on
         CopyFiles /SILENT "$INSTDIR\WireGuardCredentialProvider.dll" "$9\WireGuardCredentialProvider.dll"
 
+        ; Prüfen ob Kopieren erfolgreich war
+        ${IfNot} ${FileExists} "$9\WireGuardCredentialProvider.dll"
+            ; Fallback: direkt mit StrCpy via File-Befehl
+            SetOutPath "$9"
+            File "content\WireGuardCredentialProvider.dll"
+            SetOutPath "$INSTDIR"
+        ${EndIf}
+
+        ; Nochmal prüfen
+        ${IfNot} ${FileExists} "$9\WireGuardCredentialProvider.dll"
+            MessageBox MB_OK|MB_ICONSTOP "Konnte DLL nicht nach System32 kopieren.$\nBitte stellen Sie sicher dass keine andere Anwendung die DLL gesperrt hat,$\nund starten Sie den Installer erneut."
+            Abort
+        ${EndIf}
+
+        ; Registrieren
         DetailPrint "$(MSG_REGSVR)"
         ExecWait 'regsvr32.exe /s "$9\WireGuardCredentialProvider.dll"' $R9
         ${If} $R9 != 0
@@ -210,7 +229,7 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
             DetailPrint "Credential Provider registriert."
         ${EndIf}
 
-        ; Shutdown-Service installieren
+        ; Shutdown-Service
         CopyFiles /SILENT "$INSTDIR\WireGuardShutdownService.exe" "$9\WireGuardShutdownService.exe"
         ExecWait '"$9\WireGuardShutdownService.exe" /install'
         DetailPrint "$(MSG_SVC_START)"
