@@ -1,0 +1,32 @@
+Windows Registry Editor Version 5.00
+
+; ============================================================
+; WireGuard Credential Provider - Konfiguration
+; ============================================================
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\WireGuardCredentialProvider]
+
+; Pfad zur wireguard.exe
+"ExePath"="C:\\Program Files\\WireGuard\\wireguard.exe"
+
+; Pfad zur wg.exe (Traffic-Statistiken)
+"WgExePath"="C:\\Program Files\\WireGuard\\wg.exe"
+
+; Text auf der Kachel
+"TileLabel"="WireGuard VPN"
+
+; Eigene Icons (optional - leer lassen = eingebettete Ressource wird verwendet)
+"IconConnected"=""
+"IconDisconnected"=""
+
+; Logdatei-Pfad
+; Platzhalter ddMMyyyy wird durch das aktuelle Datum ersetzt
+; %INSTALLDIR% wird durch das Installationsverzeichnis ersetzt (vom Installer gesetzt)
+; Beispiel: C:\Program Files\Jens Kaesler\WireGuard Credential Provider\logs\wgcp_23072026.log
+"LogPath"=""
+
+; Log-Level: 0=aus, 1=CRIT (Standard), 2=WARN+CRIT, 3=DEBUG+WARN+CRIT
+"LogLevel"=dword:00000001
+
+; Log-Rotation: Logs aelter als diese Anzahl Tage werden beim Start geloescht
+"LogRetentionDays"=dword:00000007
