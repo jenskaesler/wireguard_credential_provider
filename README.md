@@ -210,6 +210,60 @@ Credential Provider und Shutdown-Service laufen als **SYSTEM**. Der Registry-Sch
 
 ---
 
+## 🔑 Smartcard / YubiKey PIV (Zweiter Faktor)
+
+Der Credential Provider unterstützt optional eine **Smartcard- oder YubiKey-Authentifizierung** als zweiten Faktor vor dem VPN-Verbindungsaufbau. Der YubiKey wird dabei im **PIV-Modus** (Personal Identity Verification) betrieben – Windows sieht ihn wie eine klassische Smartcard.
+
+### Voraussetzungen
+
+- YubiKey mit PIV-Zertifikat (Einrichtung via [YubiKey Manager](https://www.yubico.com/support/download/yubikey-manager/))
+- Windows Smartcard-Treiber (bereits enthalten in Windows 10/11)
+
+### Konfiguration
+
+Alle Smartcard-Einstellungen unter `HKEY_LOCAL_MACHINE\SOFTWARE\WireGuardCredentialProvider`:
+
+| Wert | Typ | Beschreibung | Standard |
+|---|---|---|---|
+| `SmartcardEnabled` | DWORD | Smartcard-Authentifizierung aktivieren | `0` (aus) |
+| `SmartcardPinRequired` | DWORD | PIN-Eingabe erforderlich | `1` (ja) |
+| `SmartcardPinMinLength` | DWORD | Minimale PIN-Länge | `4` |
+| `SmartcardPinMaxAttempts` | DWORD | Max. Fehlversuche bis Warnung | `3` |
+| `SmartcardTimeout` | DWORD | Sekunden warten auf Karte | `10` |
+| `SmartcardConnectOnInsert` | DWORD | Tunnel automatisch verbinden wenn YubiKey eingesteckt | `0` (nein) |
+| `SmartcardDisconnectOnRemove` | DWORD | Tunnel automatisch trennen wenn YubiKey entfernt | `0` (nein) |
+| `SmartcardReaderName` | REG_SZ | Bestimmten Reader erzwingen (leer = erster verfügbarer) | `""` |
+| `SmartcardCertThumbprint` | REG_SZ | SHA1-Thumbprint des erwarteten Zertifikats (leer = beliebig) | `""` |
+
+### Aktivierung
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\WireGuardCredentialProvider]
+"SmartcardEnabled"=dword:00000001
+"SmartcardPinRequired"=dword:00000001
+"SmartcardConnectOnInsert"=dword:00000001
+"SmartcardDisconnectOnRemove"=dword:00000001
+```
+
+### Ablauf mit aktivierter Smartcard
+
+1. Loginscreen erscheint – Kachel zeigt `🔑 Bitte YubiKey / Smartcard einstecken...`
+2. YubiKey einstecken → `✅ Smartcard erkannt`
+3. PIN eingeben (wenn `SmartcardPinRequired=1`)
+4. **Verbinden** drücken → PIV VERIFY APDU wird gesendet
+5. Bei Erfolg: Tunnel verbindet sich
+6. YubiKey entfernen → Tunnel trennt automatisch (wenn `SmartcardDisconnectOnRemove=1`)
+
+### Thumbprint ermitteln
+
+```powershell
+# PowerShell – Thumbprint des PIV-Zertifikats anzeigen
+Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -like "*YubiKey*" } | Select-Object Thumbprint, Subject
+```
+
+
+---
+
 ## 🐛 Fehlersuche
 
 `LogLevel` auf `3` setzen:

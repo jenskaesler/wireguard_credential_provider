@@ -283,6 +283,16 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
             WriteRegStr   HKLM "${REG_WGCP}" "LogPath"          ""
             WriteRegDWORD HKLM "${REG_WGCP}" "LogLevel"         1
             WriteRegDWORD HKLM "${REG_WGCP}" "LogRetentionDays" 7
+            ; Smartcard (Standard: deaktiviert)
+            WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardEnabled"            0
+            WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardPinRequired"        1
+            WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardPinMinLength"       4
+            WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardPinMaxAttempts"     3
+            WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardTimeout"            10
+            WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardConnectOnInsert"    0
+            WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardDisconnectOnRemove" 0
+            WriteRegStr   HKLM "${REG_WGCP}" "SmartcardReaderName"         ""
+            WriteRegStr   HKLM "${REG_WGCP}" "SmartcardCertThumbprint"     ""
 
             DetailPrint "Standard-Konfiguration geschrieben."
         ${Else}

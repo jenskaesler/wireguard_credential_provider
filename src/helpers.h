@@ -48,6 +48,17 @@
 #define WGCP_REG_LOGRETENTION L"LogRetentionDays"
 #define WGCP_REG_INSTALLDIR   L"InstallDir"
 
+// Smartcard / YubiKey PIV
+#define WGCP_REG_SC_ENABLED           L"SmartcardEnabled"
+#define WGCP_REG_SC_PIN_REQUIRED      L"SmartcardPinRequired"
+#define WGCP_REG_SC_PIN_MIN_LENGTH    L"SmartcardPinMinLength"
+#define WGCP_REG_SC_PIN_MAX_ATTEMPTS  L"SmartcardPinMaxAttempts"
+#define WGCP_REG_SC_READER_NAME       L"SmartcardReaderName"
+#define WGCP_REG_SC_CERT_THUMBPRINT   L"SmartcardCertThumbprint"
+#define WGCP_REG_SC_TIMEOUT           L"SmartcardTimeout"
+#define WGCP_REG_SC_CONNECT_ON_INSERT L"SmartcardConnectOnInsert"
+#define WGCP_REG_SC_DISCONNECT_ON_REMOVE L"SmartcardDisconnectOnRemove"
+
 #define WGCP_DEFAULT_EXEPATH      L"C:\\Program Files\\WireGuard\\wireguard.exe"
 #define WGCP_DEFAULT_WGEXEPATH    L"C:\\Program Files\\WireGuard\\wg.exe"
 #define WGCP_DEFAULT_LABEL        L"WireGuard VPN"
@@ -55,6 +66,15 @@
 #define WGCP_DEFAULT_ICONDISCONN  L""
 #define WGCP_DEFAULT_LOGLEVEL     1
 #define WGCP_DEFAULT_LOGRETENTION 7
+
+// Smartcard Defaults
+#define WGCP_DEFAULT_SC_ENABLED            0   // deaktiviert
+#define WGCP_DEFAULT_SC_PIN_REQUIRED       1   // PIN erforderlich
+#define WGCP_DEFAULT_SC_PIN_MIN_LENGTH     4
+#define WGCP_DEFAULT_SC_PIN_MAX_ATTEMPTS   3
+#define WGCP_DEFAULT_SC_TIMEOUT            10  // Sekunden
+#define WGCP_DEFAULT_SC_CONNECT_ON_INSERT  0
+#define WGCP_DEFAULT_SC_DISCONNECT_ON_REMOVE 0
 
 #define WG_CONFIG_DIR        L"C:\\Program Files\\WireGuard\\Data\\Configurations\\"
 #define WG_CONFIG_EXT        L".conf.dpapi"
@@ -500,4 +520,317 @@ inline void WGGetConnectedSince(PCWSTR pwszProfile, WCHAR* pwszOut, DWORD cchOut
         StringCchPrintfW(pwszOut, cchOut, L"\u23F1 Verbunden seit %02d:%02d:%02d", h, m, s);
     }
     CloseHandle(hProc);
+}
+
+// ---------------------------------------------------------------------------
+// Smartcard-Konfiguration
+// ---------------------------------------------------------------------------
+struct WGCPSmartcardConfig
+{
+    bool    bEnabled;
+    bool    bPinRequired;
+    DWORD   dwPinMinLength;
+    DWORD   dwPinMaxAttempts;
+    DWORD   dwTimeout;
+    bool    bConnectOnInsert;
+    bool    bDisconnectOnRemove;
+    WCHAR   wszReaderName[256];
+    WCHAR   wszCertThumbprint[128];
+};
+
+inline void WGCPLoadSmartcardConfig(WGCPSmartcardConfig& cfg)
+{
+    ZeroMemory(&cfg, sizeof(cfg));
+    cfg.bEnabled             = false;
+    cfg.bPinRequired         = true;
+    cfg.dwPinMinLength       = WGCP_DEFAULT_SC_PIN_MIN_LENGTH;
+    cfg.dwPinMaxAttempts     = WGCP_DEFAULT_SC_PIN_MAX_ATTEMPTS;
+    cfg.dwTimeout            = WGCP_DEFAULT_SC_TIMEOUT;
+    cfg.bConnectOnInsert     = false;
+    cfg.bDisconnectOnRemove  = false;
+
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, WGCP_REG_KEY, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+        return;
+
+    cfg.bEnabled            = ReadRegDword(hKey, WGCP_REG_SC_ENABLED,           WGCP_DEFAULT_SC_ENABLED)           != 0;
+    cfg.bPinRequired        = ReadRegDword(hKey, WGCP_REG_SC_PIN_REQUIRED,      WGCP_DEFAULT_SC_PIN_REQUIRED)      != 0;
+    cfg.dwPinMinLength      = ReadRegDword(hKey, WGCP_REG_SC_PIN_MIN_LENGTH,    WGCP_DEFAULT_SC_PIN_MIN_LENGTH);
+    cfg.dwPinMaxAttempts    = ReadRegDword(hKey, WGCP_REG_SC_PIN_MAX_ATTEMPTS,  WGCP_DEFAULT_SC_PIN_MAX_ATTEMPTS);
+    cfg.dwTimeout           = ReadRegDword(hKey, WGCP_REG_SC_TIMEOUT,           WGCP_DEFAULT_SC_TIMEOUT);
+    cfg.bConnectOnInsert    = ReadRegDword(hKey, WGCP_REG_SC_CONNECT_ON_INSERT, WGCP_DEFAULT_SC_CONNECT_ON_INSERT) != 0;
+    cfg.bDisconnectOnRemove = ReadRegDword(hKey, WGCP_REG_SC_DISCONNECT_ON_REMOVE, WGCP_DEFAULT_SC_DISCONNECT_ON_REMOVE) != 0;
+    ReadRegString(hKey, WGCP_REG_SC_READER_NAME,     cfg.wszReaderName,     256, L"");
+    ReadRegString(hKey, WGCP_REG_SC_CERT_THUMBPRINT, cfg.wszCertThumbprint, 128, L"");
+
+    RegCloseKey(hKey);
+}
+
+// ---------------------------------------------------------------------------
+// Smartcard / WinSCard Hilfsfunktionen
+// ---------------------------------------------------------------------------
+#include <winscard.h>
+#include <wincrypt.h>
+#pragma comment(lib, "winscard.lib")
+#pragma comment(lib, "crypt32.lib")
+
+// Ergebnis einer Smartcard-Authentifizierung
+enum class WGCPScResult
+{
+    Success,
+    NoCard,
+    WrongCard,       // Thumbprint passt nicht
+    PinWrong,
+    PinLocked,
+    Timeout,
+    Disabled,
+    Error
+};
+
+// Prüft ob eine Karte im Reader steckt und gibt den Reader-Namen zurück
+inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
+                               WCHAR* pwszReaderOut, DWORD cchReader)
+{
+    SCARDCONTEXT hCtx = 0;
+    if (SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &hCtx) != SCARD_S_SUCCESS)
+        return false;
+
+    // Konfigurierter Reader oder alle Reader durchsuchen
+    if (cfg.wszReaderName[0] != L'\0')
+    {
+        // Bestimmten Reader prüfen
+        SCARD_READERSTATEW rs = {};
+        rs.szReader     = cfg.wszReaderName;
+        rs.dwCurrentState = SCARD_STATE_UNAWARE;
+        LONG lRet = SCardGetStatusChangeW(hCtx, 0, &rs, 1);
+        SCardReleaseContext(hCtx);
+        if (lRet == SCARD_S_SUCCESS &&
+            (rs.dwEventState & SCARD_STATE_PRESENT))
+        {
+            StringCchCopyW(pwszReaderOut, cchReader, cfg.wszReaderName);
+            return true;
+        }
+        return false;
+    }
+
+    // Alle Reader aufzählen
+    DWORD dwLen = SCARD_AUTOALLOCATE;
+    LPWSTR pwszReaders = nullptr;
+    LONG lRet = SCardListReadersW(hCtx, nullptr,
+                                   reinterpret_cast<LPWSTR>(&pwszReaders), &dwLen);
+    if (lRet != SCARD_S_SUCCESS || !pwszReaders)
+    {
+        SCardReleaseContext(hCtx);
+        return false;
+    }
+
+    bool bFound = false;
+    for (LPCWSTR p = pwszReaders; *p; p += wcslen(p) + 1)
+    {
+        SCARD_READERSTATEW rs = {};
+        rs.szReader      = p;
+        rs.dwCurrentState = SCARD_STATE_UNAWARE;
+        if (SCardGetStatusChangeW(hCtx, 0, &rs, 1) == SCARD_S_SUCCESS &&
+            (rs.dwEventState & SCARD_STATE_PRESENT))
+        {
+            StringCchCopyW(pwszReaderOut, cchReader, p);
+            bFound = true;
+            break;
+        }
+    }
+
+    SCardFreeMemory(hCtx, pwszReaders);
+    SCardReleaseContext(hCtx);
+    return bFound;
+}
+
+// Wartet bis eine Karte eingesteckt wird (Timeout in Sekunden, 0 = sofort)
+inline bool WGCPWaitForCard(const WGCPSmartcardConfig& cfg,
+                             WCHAR* pwszReaderOut, DWORD cchReader)
+{
+    DWORD dwDeadline = GetTickCount() + cfg.dwTimeout * 1000;
+    do {
+        if (WGCPFindSmartcard(cfg, pwszReaderOut, cchReader))
+            return true;
+        Sleep(500);
+    } while (GetTickCount() < dwDeadline);
+    return false;
+}
+
+// Prüft ob Karte entfernt wurde
+inline bool WGCPIsCardRemoved(PCWSTR pwszReader)
+{
+    SCARDCONTEXT hCtx = 0;
+    if (SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &hCtx) != SCARD_S_SUCCESS)
+        return true;
+
+    SCARD_READERSTATEW rs = {};
+    rs.szReader      = pwszReader;
+    rs.dwCurrentState = SCARD_STATE_UNAWARE;
+    LONG lRet = SCardGetStatusChangeW(hCtx, 0, &rs, 1);
+    SCardReleaseContext(hCtx);
+
+    if (lRet != SCARD_S_SUCCESS) return true;
+    return (rs.dwEventState & SCARD_STATE_EMPTY) != 0;
+}
+
+// Prüft Zertifikats-Thumbprint auf der Karte (leer = kein Check)
+inline bool WGCPVerifyCertThumbprint(SCARDHANDLE hCard, PCWSTR pwszExpected)
+{
+    if (!pwszExpected || pwszExpected[0] == L'\0') return true;
+
+    // ATR lesen und Zertifikat via CryptoAPI prüfen
+    // Karte als Smartcard-Store öffnen
+    HCERTSTORE hStore = CertOpenStore(
+        CERT_STORE_PROV_SYSTEM_W, 0, 0,
+        CERT_SYSTEM_STORE_LOCAL_MACHINE | CERT_STORE_READONLY_FLAG,
+        L"MY");
+    if (!hStore) return false;
+
+    bool bMatch = false;
+    PCCERT_CONTEXT pCert = nullptr;
+    while ((pCert = CertEnumCertificatesInStore(hStore, pCert)) != nullptr)
+    {
+        // SHA1-Thumbprint berechnen
+        BYTE  rgThumb[20] = {};
+        DWORD cbThumb     = sizeof(rgThumb);
+        if (!CertGetCertificateContextProperty(pCert, CERT_SHA1_HASH_PROP_ID,
+                                               rgThumb, &cbThumb))
+            continue;
+
+        // Als Hex-String
+        WCHAR wszThumb[48] = {};
+        for (DWORD i = 0; i < cbThumb; i++)
+            StringCchPrintfW(wszThumb + i*2, 3, L"%02X", rgThumb[i]);
+
+        if (_wcsicmp(wszThumb, pwszExpected) == 0)
+        {
+            bMatch = true;
+            CertFreeCertificateContext(pCert);
+            break;
+        }
+    }
+    CertCloseStore(hStore, 0);
+    return bMatch;
+}
+
+// Haupt-Authentifizierungsfunktion
+// pwszPin: PIN (kann nullptr sein wenn bPinRequired=false)
+inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
+                                               PCWSTR pwszPin)
+{
+    if (!cfg.bEnabled) return WGCPScResult::Disabled;
+
+    // Reader finden
+    WCHAR wszReader[256] = {};
+    if (!WGCPWaitForCard(cfg, wszReader, 256))
+    {
+        LOG_WARN(L"Smartcard: Keine Karte gefunden (Timeout)");
+        return WGCPScResult::Timeout;
+    }
+
+    WCHAR d[512] = {};
+    StringCchPrintfW(d, 512, L"Smartcard: Karte gefunden in Reader '%s'", wszReader);
+    LOG_DEBUG(d);
+
+    // Verbindung zur Karte herstellen
+    SCARDCONTEXT hCtx   = 0;
+    SCARDHANDLE  hCard  = 0;
+    DWORD        dwProto = 0;
+
+    if (SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &hCtx) != SCARD_S_SUCCESS)
+        return WGCPScResult::Error;
+
+    LONG lRet = SCardConnectW(hCtx, wszReader,
+                               SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1,
+                               &hCard, &dwProto);
+    if (lRet != SCARD_S_SUCCESS)
+    {
+        SCardReleaseContext(hCtx);
+        LOG_WARN(L"Smartcard: SCardConnect fehlgeschlagen");
+        return WGCPScResult::Error;
+    }
+
+    // Thumbprint prüfen
+    if (!WGCPVerifyCertThumbprint(hCard, cfg.wszCertThumbprint))
+    {
+        SCardDisconnect(hCard, SCARD_LEAVE_CARD);
+        SCardReleaseContext(hCtx);
+        LOG_WARN(L"Smartcard: Zertifikat-Thumbprint stimmt nicht ueberein");
+        return WGCPScResult::WrongCard;
+    }
+
+    // PIN-Verifizierung via VERIFY APDU (ISO 7816-4)
+    if (cfg.bPinRequired && pwszPin && pwszPin[0] != L'\0')
+    {
+        // PIN von Unicode nach ASCII konvertieren
+        char szPin[32] = {};
+        WideCharToMultiByte(CP_ACP, 0, pwszPin, -1, szPin, sizeof(szPin)-1, nullptr, nullptr);
+        DWORD dwPinLen = (DWORD)strlen(szPin);
+
+        if (dwPinLen < cfg.dwPinMinLength)
+        {
+            SCardDisconnect(hCard, SCARD_LEAVE_CARD);
+            SCardReleaseContext(hCtx);
+            return WGCPScResult::PinWrong;
+        }
+
+        // PIV VERIFY APDU: CLA=00, INS=20, P1=00, P2=80 (PIV Card Application PIN)
+        // Daten: PIN padded mit 0xFF auf 8 Byte
+        BYTE apdu[13] = { 0x00, 0x20, 0x00, 0x80, 0x08,
+                          0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        memcpy(apdu + 5, szPin, min(dwPinLen, 8u));
+
+        BYTE   resp[2]  = {};
+        DWORD  dwRecv   = sizeof(resp);
+        SCARD_IO_REQUEST ioReq = { dwProto, sizeof(SCARD_IO_REQUEST) };
+        const SCARD_IO_REQUEST* pProto = (dwProto == SCARD_PROTOCOL_T0)
+                                       ? SCARD_PCI_T0 : SCARD_PCI_T1;
+
+        lRet = SCardTransmit(hCard, pProto, apdu, sizeof(apdu),
+                             nullptr, resp, &dwRecv);
+
+        // PIN im Speicher löschen
+        SecureZeroMemory(szPin, sizeof(szPin));
+        SecureZeroMemory(apdu + 5, 8);
+
+        if (lRet != SCARD_S_SUCCESS)
+        {
+            SCardDisconnect(hCard, SCARD_LEAVE_CARD);
+            SCardReleaseContext(hCtx);
+            LOG_WARN(L"Smartcard: SCardTransmit fehlgeschlagen");
+            return WGCPScResult::Error;
+        }
+
+        // SW1=90, SW2=00 -> Erfolg
+        // SW1=63, SW2=CX -> X Versuche verbleibend
+        // SW1=69, SW2=83 -> PIN gesperrt
+        if (resp[0] == 0x90 && resp[1] == 0x00)
+        {
+            LOG_DEBUG(L"Smartcard: PIN-Verifikation erfolgreich");
+        }
+        else if (resp[0] == 0x69 && resp[1] == 0x83)
+        {
+            SCardDisconnect(hCard, SCARD_LEAVE_CARD);
+            SCardReleaseContext(hCtx);
+            LOG_WARN(L"Smartcard: PIN gesperrt");
+            return WGCPScResult::PinLocked;
+        }
+        else
+        {
+            WCHAR e[64] = {};
+            DWORD remaining = resp[1] & 0x0F;
+            StringCchPrintfW(e, 64,
+                             L"Smartcard: PIN falsch. Verbleibende Versuche: %lu", remaining);
+            LOG_WARN(e);
+            SCardDisconnect(hCard, SCARD_LEAVE_CARD);
+            SCardReleaseContext(hCtx);
+            return WGCPScResult::PinWrong;
+        }
+    }
+
+    SCardDisconnect(hCard, SCARD_LEAVE_CARD);
+    SCardReleaseContext(hCtx);
+    LOG_DEBUG(L"Smartcard: Authentifizierung erfolgreich");
+    return WGCPScResult::Success;
 }

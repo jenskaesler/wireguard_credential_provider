@@ -12,6 +12,7 @@ WireGuardCredential::WireGuardCredential()
     , _nProfiles(0), _dwSelectedProfile(0), _bConnected(false)
     , _bSelected(false), _hTimerThread(nullptr), _bStopTimer(false)
     , _pProvider(nullptr)
+    , _dwPinAttempts(0), _hScWatchThread(nullptr), _bStopScWatch(false)
 {
     ZeroMemory(_rgCredProvFieldDescriptors, sizeof(_rgCredProvFieldDescriptors));
     ZeroMemory(_rgFieldStatePairs,          sizeof(_rgFieldStatePairs));
@@ -22,6 +23,10 @@ WireGuardCredential::WireGuardCredential()
     ZeroMemory(_wszIconDisconn,             sizeof(_wszIconDisconn));
     ZeroMemory(_wszStatus,                  sizeof(_wszStatus));
     ZeroMemory(_wszTraffic,                 sizeof(_wszTraffic));
+    ZeroMemory(_wszPin,                     sizeof(_wszPin));
+    ZeroMemory(_wszScStatus,                sizeof(_wszScStatus));
+    ZeroMemory(_wszCurrentReader,           sizeof(_wszCurrentReader));
+    ZeroMemory(&_scConfig,                  sizeof(_scConfig));
 }
 
 WireGuardCredential::~WireGuardCredential()
@@ -34,6 +39,17 @@ WireGuardCredential::~WireGuardCredential()
         CloseHandle(_hTimerThread);
         _hTimerThread = nullptr;
     }
+    // Smartcard-Watch-Thread stoppen
+    _bStopScWatch = true;
+    if (_hScWatchThread)
+    {
+        WaitForSingleObject(_hScWatchThread, 3000);
+        CloseHandle(_hScWatchThread);
+        _hScWatchThread = nullptr;
+    }
+    // PIN sicher löschen
+    SecureZeroMemory(_wszPin, sizeof(_wszPin));
+
     for (int i = 0; i < FI_NUM_FIELDS; i++)
         CoTaskMemFree(_rgCredProvFieldDescriptors[i].pszLabel);
 }
@@ -62,7 +78,20 @@ HRESULT WireGuardCredential::Initialize(
         _LoadConfig();
         _LoadProfiles();
 
-        // Log-Rotation: alte Logs beim Start bereinigen
+        // Smartcard-Konfiguration laden
+        WGCPLoadSmartcardConfig(_scConfig);
+        if (_scConfig.bEnabled)
+        {
+            LOG_DEBUG(L"Smartcard-Authentifizierung aktiviert");
+            // SC-Status-Feld sichtbar machen
+            _rgFieldStatePairs[FI_SC_STATUS].cpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+            if (_scConfig.bPinRequired)
+                _rgFieldStatePairs[FI_PIN].cpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+            StringCchCopyW(_wszScStatus, MAX_LABEL_WGCP,
+                           L"\U0001F511 Bitte YubiKey / Smartcard einstecken...");
+        }
+
+        // Log-Rotation
         {
             WCHAR wszLogPath[MAX_PATH_WGCP] = {};
             DWORD dwRetention = WGCP_DEFAULT_LOGRETENTION;
@@ -78,6 +107,14 @@ HRESULT WireGuardCredential::Initialize(
 
         _RefreshStatus();
 
+        // Smartcard-Watch-Thread starten (Connect/Disconnect on Insert/Remove)
+        if (_scConfig.bEnabled &&
+            (_scConfig.bConnectOnInsert || _scConfig.bDisconnectOnRemove))
+        {
+            _hScWatchThread = CreateThread(nullptr, 0, _ScWatchThreadProc, this, 0, nullptr);
+            if (_hScWatchThread)
+                LOG_DEBUG(L"Smartcard-Watch-Thread gestartet");
+        }
     }
     else
     {
@@ -429,8 +466,10 @@ STDMETHODIMP WireGuardCredential::GetStringValue(DWORD dwFieldID, WCHAR** ppwsz)
         else StringCchCopyW(wszLabel,MAX_LABEL_WGCP,WGCP_DEFAULT_LABEL);
         return WGCPStrDup(wszLabel, ppwsz);
     }
-    case FI_STATUS:  return WGCPStrDup(_wszStatus,  ppwsz);
-    case FI_TRAFFIC: return WGCPStrDup(_wszTraffic, ppwsz);
+    case FI_STATUS:    return WGCPStrDup(_wszStatus,   ppwsz);
+    case FI_TRAFFIC:   return WGCPStrDup(_wszTraffic,  ppwsz);
+    case FI_SC_STATUS: return WGCPStrDup(_wszScStatus, ppwsz);
+    case FI_PIN:       return WGCPStrDup(L"",          ppwsz);  // Passwortfeld: leer zurückgeben
     case FI_BUTTON:
     {
         PCWSTR p = (_nProfiles == 0) ? L"Kein Profil"
@@ -488,7 +527,164 @@ STDMETHODIMP WireGuardCredential::SetComboBoxSelectedValue(
 }
 
 // ---------------------------------------------------------------------------
-// CommandLinkClicked - Verbinden / Trennen
+// SetStringValue - PIN-Eingabe speichern
+// ---------------------------------------------------------------------------
+STDMETHODIMP WireGuardCredential::SetStringValue(DWORD dwFieldID, PCWSTR pwz)
+{
+    if (dwFieldID == FI_PIN && pwz)
+    {
+        StringCchCopyW(_wszPin, ARRAYSIZE(_wszPin), pwz);
+    }
+    return S_OK;
+}
+
+// ---------------------------------------------------------------------------
+// _UpdateScStatus - Smartcard-Statustext aktualisieren und UI benachrichtigen
+// ---------------------------------------------------------------------------
+void WireGuardCredential::_UpdateScStatus(PCWSTR pwszMsg)
+{
+    StringCchCopyW(_wszScStatus, MAX_LABEL_WGCP, pwszMsg);
+    if (_pCredProvCredentialEvents)
+        _pCredProvCredentialEvents->SetFieldString(this, FI_SC_STATUS, _wszScStatus);
+}
+
+// ---------------------------------------------------------------------------
+// _DoSmartcardAuth - Authentifizierung durchführen
+// ---------------------------------------------------------------------------
+bool WireGuardCredential::_DoSmartcardAuth()
+{
+    if (!_scConfig.bEnabled) return true;
+
+    _UpdateScStatus(L"\U0001F50D Suche Smartcard...");
+
+    WGCPScResult result = WGCPAuthenticateSmartcard(_scConfig, _wszPin);
+
+    // PIN sofort sicher löschen
+    SecureZeroMemory(_wszPin, sizeof(_wszPin));
+
+    switch (result)
+    {
+    case WGCPScResult::Success:
+        StringCchCopyW(_wszCurrentReader, ARRAYSIZE(_wszCurrentReader),
+                       _scConfig.wszReaderName[0] ? _scConfig.wszReaderName : L"");
+        _UpdateScStatus(L"\u2705 Smartcard-Authentifizierung erfolgreich");
+        _dwPinAttempts = 0;
+        LOG_DEBUG(L"Smartcard: Authentifizierung erfolgreich");
+        return true;
+
+    case WGCPScResult::Timeout:
+    case WGCPScResult::NoCard:
+        _UpdateScStatus(L"\u26A0 Keine Smartcard / YubiKey gefunden");
+        return false;
+
+    case WGCPScResult::WrongCard:
+        _UpdateScStatus(L"\u274C Falsche Smartcard (Thumbprint stimmt nicht)");
+        return false;
+
+    case WGCPScResult::PinWrong:
+        _dwPinAttempts++;
+        {
+            WCHAR wszMsg[128] = {};
+            DWORD dwRem = (_scConfig.dwPinMaxAttempts > _dwPinAttempts)
+                          ? _scConfig.dwPinMaxAttempts - _dwPinAttempts : 0;
+            StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+                             L"\u274C PIN falsch. Verbleibende Versuche: %lu", dwRem);
+            _UpdateScStatus(wszMsg);
+        }
+        return false;
+
+    case WGCPScResult::PinLocked:
+        _UpdateScStatus(L"\U0001F512 PIN gesperrt. Bitte PIN mit YubiKey Manager entsperren.");
+        return false;
+
+    case WGCPScResult::Disabled:
+        return true;
+
+    default:
+        _UpdateScStatus(L"\u274C Smartcard-Fehler aufgetreten");
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Smartcard-Watch-Thread: überwacht Einstecken/Entfernen
+// ---------------------------------------------------------------------------
+DWORD WINAPI WireGuardCredential::_ScWatchThreadProc(LPVOID lpParam)
+{
+    WireGuardCredential* pThis = static_cast<WireGuardCredential*>(lpParam);
+    bool bCardWasPresent = false;
+
+    LOG_DEBUG(L"SC-Watch: Thread gestartet");
+
+    while (!pThis->_bStopScWatch)
+    {
+        WCHAR wszReader[256] = {};
+        bool bCardNow = WGCPFindSmartcard(pThis->_scConfig, wszReader, 256);
+
+        if (bCardNow && !bCardWasPresent)
+        {
+            // Karte wurde eingesteckt
+            StringCchCopyW(pThis->_wszCurrentReader, 256, wszReader);
+            LOG_DEBUG(L"SC-Watch: Karte eingesteckt");
+
+            if (pThis->_scConfig.bConnectOnInsert &&
+                !pThis->_bConnected && pThis->_nProfiles > 0)
+            {
+                pThis->_UpdateScStatus(L"\U0001F511 Smartcard erkannt – authentifiziere...");
+                if (pThis->_DoSmartcardAuth())
+                {
+                    PCWSTR pwszProfile = pThis->_rgProfiles[pThis->_dwSelectedProfile];
+                    LOG_DEBUG(L"SC-Watch: Auto-Connect");
+                    WGConnect(pThis->_wszExePath, pwszProfile);
+                    for (int i = 0; i < 12; i++)
+                    {
+                        Sleep(500);
+                        if (WGIsTunnelConnected(pwszProfile)) break;
+                    }
+                    pThis->_RefreshStatus();
+                    pThis->_UpdateFields();
+                    if (pThis->_pProvider)
+                        pThis->_pProvider->NotifyStatusChanged();
+                }
+            }
+            else
+            {
+                pThis->_UpdateScStatus(L"\u2705 Smartcard erkannt – PIN eingeben und Verbinden drücken");
+            }
+        }
+        else if (!bCardNow && bCardWasPresent)
+        {
+            // Karte wurde entfernt
+            LOG_DEBUG(L"SC-Watch: Karte entfernt");
+            pThis->_UpdateScStatus(L"\U0001F511 Bitte YubiKey / Smartcard einstecken...");
+
+            if (pThis->_scConfig.bDisconnectOnRemove && pThis->_bConnected)
+            {
+                PCWSTR pwszProfile = pThis->_rgProfiles[pThis->_dwSelectedProfile];
+                LOG_DEBUG(L"SC-Watch: Auto-Disconnect wegen Karte entfernt");
+                WGDisconnect(pThis->_wszExePath, pwszProfile);
+                for (int i = 0; i < 12; i++)
+                {
+                    Sleep(500);
+                    if (!WGIsTunnelConnected(pwszProfile)) break;
+                }
+                pThis->_RefreshStatus();
+                pThis->_UpdateFields();
+                if (pThis->_pProvider)
+                    pThis->_pProvider->NotifyStatusChanged();
+            }
+        }
+
+        bCardWasPresent = bCardNow;
+        Sleep(1000);  // jede Sekunde prüfen
+    }
+
+    LOG_DEBUG(L"SC-Watch: Thread beendet");
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// CommandLinkClicked - Verbinden / Trennen (mit Smartcard-Auth)
 // ---------------------------------------------------------------------------
 STDMETHODIMP WireGuardCredential::CommandLinkClicked(DWORD dwFieldID)
 {
@@ -502,7 +698,6 @@ STDMETHODIMP WireGuardCredential::CommandLinkClicked(DWORD dwFieldID)
         StringCchPrintfW(d,ARRAYSIZE(d),L"Trenne Tunnel: %s",pwszProfile); LOG_DEBUG(d);
         WGDisconnect(_wszExePath, pwszProfile);
 
-        // Warten bis Service wirklich gestoppt (max 6 Sekunden)
         for (int i = 0; i < 12; i++)
         {
             Sleep(500);
@@ -515,11 +710,21 @@ STDMETHODIMP WireGuardCredential::CommandLinkClicked(DWORD dwFieldID)
     }
     else
     {
+        // Smartcard-Authentifizierung wenn aktiviert
+        if (_scConfig.bEnabled)
+        {
+            if (!_DoSmartcardAuth())
+            {
+                _RefreshStatus();
+                _UpdateFields();
+                return S_OK;
+            }
+        }
+
         WCHAR d[MAX_PATH_WGCP+32]={};
         StringCchPrintfW(d,ARRAYSIZE(d),L"Verbinde Tunnel: %s",pwszProfile); LOG_DEBUG(d);
         WGConnect(_wszExePath, pwszProfile);
 
-        // Warten bis Service laeuft (max 6 Sekunden)
         for (int i = 0; i < 12; i++)
         {
             Sleep(500);
@@ -529,6 +734,7 @@ STDMETHODIMP WireGuardCredential::CommandLinkClicked(DWORD dwFieldID)
                 break;
             }
         }
+
     }
     _RefreshStatus();
     _UpdateFields();
