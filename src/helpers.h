@@ -564,6 +564,16 @@ inline void WGCPLoadSmartcardConfig(WGCPSmartcardConfig& cfg)
     ReadRegString(hKey, WGCP_REG_SC_CERT_THUMBPRINT, cfg.wszCertThumbprint, 128, L"");
 
     RegCloseKey(hKey);
+
+    // Konfiguration loggen
+    WCHAR wszLog[512] = {};
+    StringCchPrintfW(wszLog, ARRAYSIZE(wszLog),
+        L"SC-Config: enabled=%d pinReq=%d pinMin=%lu maxAttempts=%lu timeout=%lu "
+        L"connectOnInsert=%d disconnectOnRemove=%d reader='%s' thumbprint='%s'",
+        cfg.bEnabled, cfg.bPinRequired, cfg.dwPinMinLength, cfg.dwPinMaxAttempts,
+        cfg.dwTimeout, cfg.bConnectOnInsert, cfg.bDisconnectOnRemove,
+        cfg.wszReaderName, cfg.wszCertThumbprint);
+    LOG_DEBUG(wszLog);
 }
 
 // ---------------------------------------------------------------------------
@@ -593,12 +603,19 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
 {
     SCARDCONTEXT hCtx = 0;
     if (SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &hCtx) != SCARD_S_SUCCESS)
+    {
+        WCHAR e[64] = {};
+        StringCchPrintfW(e, 64, L"SC: SCardEstablishContext err=%lu", GetLastError());
+        LOG_WARN(e);
         return false;
+    }
 
     // Konfigurierter Reader oder alle Reader durchsuchen
     if (cfg.wszReaderName[0] != L'\0')
     {
-        // Bestimmten Reader prüfen
+        WCHAR d[320] = {};
+        StringCchPrintfW(d, 320, L"SC: Pruefe konfigurierten Reader '%s'", cfg.wszReaderName);
+        LOG_DEBUG(d);
         SCARD_READERSTATEW rs = {};
         rs.szReader     = cfg.wszReaderName;
         rs.dwCurrentState = SCARD_STATE_UNAWARE;
@@ -607,9 +624,13 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
         if (lRet == SCARD_S_SUCCESS &&
             (rs.dwEventState & SCARD_STATE_PRESENT))
         {
+            WCHAR d2[320] = {};
+            StringCchPrintfW(d2, 320, L"SC: Karte gefunden in Reader '%s'", cfg.wszReaderName);
+            LOG_DEBUG(d2);
             StringCchCopyW(pwszReaderOut, cchReader, cfg.wszReaderName);
             return true;
         }
+        LOG_DEBUG(L"SC: Kein Karte im konfigurierten Reader");
         return false;
     }
 
@@ -620,6 +641,9 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
                                    reinterpret_cast<LPWSTR>(&pwszReaders), &dwLen);
     if (lRet != SCARD_S_SUCCESS || !pwszReaders)
     {
+        WCHAR e[64] = {};
+        StringCchPrintfW(e, 64, L"SC: SCardListReaders err=0x%08X", lRet);
+        LOG_WARN(e);
         SCardReleaseContext(hCtx);
         return false;
     }
@@ -627,18 +651,25 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
     bool bFound = false;
     for (LPCWSTR p = pwszReaders; *p; p += wcslen(p) + 1)
     {
+        WCHAR d[320] = {};
+        StringCchPrintfW(d, 320, L"SC: Pruefe Reader '%s'", p);
+        LOG_DEBUG(d);
         SCARD_READERSTATEW rs = {};
         rs.szReader      = p;
         rs.dwCurrentState = SCARD_STATE_UNAWARE;
         if (SCardGetStatusChangeW(hCtx, 0, &rs, 1) == SCARD_S_SUCCESS &&
             (rs.dwEventState & SCARD_STATE_PRESENT))
         {
+            WCHAR d2[320] = {};
+            StringCchPrintfW(d2, 320, L"SC: Karte gefunden in Reader '%s'", p);
+            LOG_DEBUG(d2);
             StringCchCopyW(pwszReaderOut, cchReader, p);
             bFound = true;
             break;
         }
     }
 
+    if (!bFound) LOG_DEBUG(L"SC: Keine Karte in keinem Reader gefunden");
     SCardFreeMemory(hCtx, pwszReaders);
     SCardReleaseContext(hCtx);
     return bFound;
@@ -648,12 +679,16 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
 inline bool WGCPWaitForCard(const WGCPSmartcardConfig& cfg,
                              WCHAR* pwszReaderOut, DWORD cchReader)
 {
+    WCHAR d[64] = {};
+    StringCchPrintfW(d, 64, L"SC: Warte auf Karte (Timeout %lu s)...", cfg.dwTimeout);
+    LOG_DEBUG(d);
     DWORD dwDeadline = GetTickCount() + cfg.dwTimeout * 1000;
     do {
         if (WGCPFindSmartcard(cfg, pwszReaderOut, cchReader))
             return true;
         Sleep(500);
     } while (GetTickCount() < dwDeadline);
+    LOG_WARN(L"SC: Timeout - keine Karte gefunden");
     return false;
 }
 
@@ -662,7 +697,10 @@ inline bool WGCPIsCardRemoved(PCWSTR pwszReader)
 {
     SCARDCONTEXT hCtx = 0;
     if (SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &hCtx) != SCARD_S_SUCCESS)
+    {
+        LOG_WARN(L"SC: SCardEstablishContext (IsCardRemoved) fehlgeschlagen");
         return true;
+    }
 
     SCARD_READERSTATEW rs = {};
     rs.szReader      = pwszReader;
@@ -671,13 +709,27 @@ inline bool WGCPIsCardRemoved(PCWSTR pwszReader)
     SCardReleaseContext(hCtx);
 
     if (lRet != SCARD_S_SUCCESS) return true;
-    return (rs.dwEventState & SCARD_STATE_EMPTY) != 0;
+    bool bRemoved = (rs.dwEventState & SCARD_STATE_EMPTY) != 0;
+    if (bRemoved)
+    {
+        WCHAR d[320] = {};
+        StringCchPrintfW(d, 320, L"SC: Karte entfernt aus Reader '%s'", pwszReader);
+        LOG_DEBUG(d);
+    }
+    return bRemoved;
 }
 
 // Prüft Zertifikats-Thumbprint auf der Karte (leer = kein Check)
 inline bool WGCPVerifyCertThumbprint(SCARDHANDLE hCard, PCWSTR pwszExpected)
 {
-    if (!pwszExpected || pwszExpected[0] == L'\0') return true;
+    if (!pwszExpected || pwszExpected[0] == L'\0')
+    {
+        LOG_DEBUG(L"SC: Kein Thumbprint konfiguriert - Zertifikat-Check uebersprungen");
+        return true;
+    }
+    WCHAR d[160] = {};
+    StringCchPrintfW(d, 160, L"SC: Pruefe Zertifikat-Thumbprint '%s'", pwszExpected);
+    LOG_DEBUG(d);
 
     // ATR lesen und Zertifikat via CryptoAPI prüfen
     // Karte als Smartcard-Store öffnen
@@ -711,6 +763,10 @@ inline bool WGCPVerifyCertThumbprint(SCARDHANDLE hCard, PCWSTR pwszExpected)
         }
     }
     CertCloseStore(hStore, 0);
+    if (bMatch)
+        LOG_DEBUG(L"SC: Thumbprint-Verifikation erfolgreich");
+    else
+        LOG_WARN(L"SC: Kein passendes Zertifikat gefunden");
     return bMatch;
 }
 

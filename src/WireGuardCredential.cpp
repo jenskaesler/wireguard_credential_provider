@@ -534,6 +534,7 @@ STDMETHODIMP WireGuardCredential::SetStringValue(DWORD dwFieldID, PCWSTR pwz)
     if (dwFieldID == FI_PIN && pwz)
     {
         StringCchCopyW(_wszPin, ARRAYSIZE(_wszPin), pwz);
+        LOG_DEBUG(L"SC: PIN-Eingabe empfangen");
     }
     return S_OK;
 }
@@ -544,6 +545,9 @@ STDMETHODIMP WireGuardCredential::SetStringValue(DWORD dwFieldID, PCWSTR pwz)
 void WireGuardCredential::_UpdateScStatus(PCWSTR pwszMsg)
 {
     StringCchCopyW(_wszScStatus, MAX_LABEL_WGCP, pwszMsg);
+    WCHAR d[MAX_LABEL_WGCP + 16] = {};
+    StringCchPrintfW(d, ARRAYSIZE(d), L"SC-Status: %s", pwszMsg);
+    LOG_DEBUG(d);
     if (_pCredProvCredentialEvents)
         _pCredProvCredentialEvents->SetFieldString(this, FI_SC_STATUS, _wszScStatus);
 }
@@ -556,6 +560,15 @@ bool WireGuardCredential::_DoSmartcardAuth()
     if (!_scConfig.bEnabled) return true;
 
     _UpdateScStatus(L"\U0001F50D Suche Smartcard...");
+    LOG_DEBUG(L"SC: Starte Authentifizierung");
+
+    // PIN-Länge loggen (nicht die PIN selbst)
+    if (_scConfig.bPinRequired)
+    {
+        WCHAR d[64] = {};
+        StringCchPrintfW(d, 64, L"SC: PIN-Laenge: %zu Zeichen", wcslen(_wszPin));
+        LOG_DEBUG(d);
+    }
 
     WGCPScResult result = WGCPAuthenticateSmartcard(_scConfig, _wszPin);
 
@@ -598,6 +611,7 @@ bool WireGuardCredential::_DoSmartcardAuth()
         return false;
 
     case WGCPScResult::Disabled:
+        LOG_DEBUG(L"SC: Smartcard deaktiviert - Auth uebersprungen");
         return true;
 
     default:
@@ -634,7 +648,9 @@ DWORD WINAPI WireGuardCredential::_ScWatchThreadProc(LPVOID lpParam)
                 if (pThis->_DoSmartcardAuth())
                 {
                     PCWSTR pwszProfile = pThis->_rgProfiles[pThis->_dwSelectedProfile];
-                    LOG_DEBUG(L"SC-Watch: Auto-Connect");
+                    WCHAR d[MAX_PATH_WGCP + 32] = {};
+                    StringCchPrintfW(d, ARRAYSIZE(d), L"SC-Watch: Auto-Connect Tunnel '%s'", pwszProfile);
+                    LOG_DEBUG(d);
                     WGConnect(pThis->_wszExePath, pwszProfile);
                     for (int i = 0; i < 12; i++)
                     {
