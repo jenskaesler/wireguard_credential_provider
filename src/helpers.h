@@ -835,7 +835,7 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
         // Data: PIN padded with 0xFF to 8 bytes
         BYTE apdu[13] = { 0x00, 0x20, 0x00, 0x80, 0x08,
                           0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-        memcpy(apdu + 5, szPin, min(dwPinLen, 8u));
+        memcpy(apdu + 5, szPin, (dwPinLen < 8u ? dwPinLen : 8u));
 
         BYTE   resp[2]  = {};
         DWORD  dwRecv   = sizeof(resp);

@@ -761,7 +761,6 @@ STDMETHODIMP WireGuardCredential::CommandLinkClicked(DWORD dwFieldID)
 // ---------------------------------------------------------------------------
 STDMETHODIMP WireGuardCredential::GetCheckboxValue(DWORD, BOOL*, WCHAR**) { return E_NOTIMPL; }
 STDMETHODIMP WireGuardCredential::GetSubmitButtonValue(DWORD, DWORD*)     { return E_NOTIMPL; }
-STDMETHODIMP WireGuardCredential::SetStringValue(DWORD, PCWSTR)           { return E_NOTIMPL; }
 STDMETHODIMP WireGuardCredential::SetCheckboxValue(DWORD, BOOL)           { return E_NOTIMPL; }
 
 STDMETHODIMP WireGuardCredential::GetSerialization(
