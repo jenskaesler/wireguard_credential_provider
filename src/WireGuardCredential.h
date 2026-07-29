@@ -2,26 +2,26 @@
 //
 // WireGuardCredential.h
 //
-// Implementierung von ICredentialProviderCredential.
-// Repräsentiert die einzelne Kachel auf dem Windows-Anmeldebildschirm
-// und steuert die gesamte WireGuard-Tunnel- und Smartcard-Logik.
+// Implementation of ICredentialProviderCredential.
+// Represents the single tile on the Windows login screen
+// and controls all WireGuard tunnel and smartcard logic.
 //
 
 #include "helpers.h"
 
 // ---------------------------------------------------------------------------
-// Feld-IDs (Reihenfolge entspricht g_rgFields in FieldDescriptors.h)
+// Field IDs (order matches g_rgFields in FieldDescriptors.h)
 // ---------------------------------------------------------------------------
 enum FIELD_ID
 {
-    FI_TILEIMAGE  = 0,  // Kachel-Icon
-    FI_LABEL      = 1,  // Überschrift
-    FI_STATUS     = 2,  // Verbindungsstatus mit Timer
-    FI_TRAFFIC    = 3,  // Datendurchsatz
-    FI_PROFILE    = 4,  // Profil-Auswahl (ComboBox)
-    FI_SC_STATUS  = 5,  // Smartcard-Status ("Bitte YubiKey einstecken...")
-    FI_PIN        = 6,  // PIN-Eingabe (nur sichtbar wenn SC aktiv + PIN erforderlich)
-    FI_BUTTON     = 7,  // Aktion-Button
+    FI_TILEIMAGE  = 0,  // Tile icon
+    FI_LABEL      = 1,  // Heading
+    FI_STATUS     = 2,  // Connection status with timer
+    FI_TRAFFIC    = 3,  // Data throughput
+    FI_PROFILE    = 4,  // Profile selection (ComboBox)
+    FI_SC_STATUS  = 5,  // Smartcard status ("Please insert YubiKey...")
+    FI_PIN        = 6,  // PIN input (visible only when SC active + PIN required)
+    FI_BUTTON     = 7,  // Action button
     FI_NUM_FIELDS = 8
 };
 
@@ -77,36 +77,36 @@ private:
     ICredentialProviderCredentialEvents*    _pCredProvCredentialEvents;
     WireGuardProvider*                      _pProvider;
 
-    // WireGuard-Profile
+    // WireGuard profiles
     WCHAR   _rgProfiles[MAX_PROFILES][MAX_PATH_WGCP];
     int     _nProfiles;
     DWORD   _dwSelectedProfile;
 
-    // Verbindungsstatus
+    // Connection status
     volatile bool _bConnected;
     volatile bool _bSelected;
 
-    // Konfigurationspfade
+    // Configuration paths
     WCHAR   _wszExePath[MAX_PATH_WGCP];
     WCHAR   _wszWgExePath[MAX_PATH_WGCP];
     WCHAR   _wszIconConn[MAX_PATH_WGCP];
     WCHAR   _wszIconDisconn[MAX_PATH_WGCP];
 
-    // Anzeigetexte
+    // Display strings
     WCHAR   _wszStatus[MAX_LABEL_WGCP];
     WCHAR   _wszTraffic[MAX_LABEL_WGCP];
 
-    // Smartcard-Konfiguration und Zustand
+    // Smartcard configuration and state
     WGCPSmartcardConfig _scConfig;
-    WCHAR   _wszPin[64];            // PIN-Eingabe (wird nach Verwendung gelöscht)
-    WCHAR   _wszScStatus[MAX_LABEL_WGCP]; // SC-Statusanzeige
-    DWORD   _dwPinAttempts;         // Fehlversuche seit letztem Erfolg
-    WCHAR   _wszCurrentReader[256]; // Reader in dem zuletzt eine Karte erkannt wurde
+    WCHAR   _wszPin[64];            // PIN input (erased after use)
+    WCHAR   _wszScStatus[MAX_LABEL_WGCP]; // SC status display
+    DWORD   _dwPinAttempts;         // Failed attempts since last success
+    WCHAR   _wszCurrentReader[256]; // Reader in which a card was last detected
 
-    // Auto-Connect/Disconnect Threads
+    // Auto-connect/disconnect threads
     HANDLE          _hTimerThread;
     volatile bool   _bStopTimer;
-    HANDLE          _hScWatchThread;    // Überwacht Karten-Einstecken/Entfernen
+    HANDLE          _hScWatchThread;    // Monitors card insert/remove events
     volatile bool   _bStopScWatch;
 
     static DWORD WINAPI _TimerThreadProc(LPVOID lpParam);
@@ -117,6 +117,6 @@ private:
     void    _RefreshStatus();
     void    _UpdateFields();
     void    _UpdateScStatus(PCWSTR pwszMsg);
-    bool    _DoSmartcardAuth();         // Führt Auth durch, zeigt Fehlermeldungen
+    bool    _DoSmartcardAuth();         // Performs auth, displays error messages
     HRESULT _LoadBitmap(PCWSTR pwszPath, HBITMAP* phbmp);
 };

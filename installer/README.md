@@ -1,6 +1,6 @@
 # Installer
 
-## Voraussetzungen
+## Prerequisites
 
 | Tool | Download |
 |---|---|
@@ -8,37 +8,37 @@
 | nsProcess Plugin | https://nsis.sourceforge.io/NsProcess_plugin |
 | SimpleSC Plugin | https://nsis.sourceforge.io/NSIS_Simple_Service_Plugin |
 
-Plugins in `C:\Program Files (x86)\NSIS\Plugins\x86-unicode\` ablegen.
+Place the plugins in `C:\Program Files (x86)\NSIS\Plugins\x86-unicode\`.
 
 ## Build
 
-1. Visual Studio: beide Projekte in **Release | x64** bauen
-2. `build.bat` ausführen – kopiert die Binaries und ruft NSIS auf
+1. Visual Studio: build both projects in **Release | x64**
+2. Run `build.bat` – copies the binaries and invokes NSIS
 
-Der fertige Installer liegt als `Setup_WireGuardCredentialProvider_x64.exe` im `installer\`-Verzeichnis.
+The finished installer is written to `installer\Setup_WireGuardCredentialProvider_x64.exe`.
 
-## Enthaltene Dateien
+## Included Files
 
-Der Installer verteilt alle Abhängigkeiten selbst. Kein separater deploy-Schritt nötig:
+The installer distributes all dependencies itself. No separate deploy step is required:
 
 - `WireGuardCredentialProvider.dll` → `%SystemRoot%\System32\`
-- `WireGuardShutdownService.exe` → `%SystemRoot%\System32\`  
-- `configure.reg` → wird bei Erstinstallation importiert
+- `WireGuardShutdownService.exe` → `%SystemRoot%\System32\`
+- Default registry configuration → imported on first install
 
-## Verzeichnisstruktur
+## Directory Structure
 
 ```
 installer/
 ├── build.bat
 ├── WireGuardCredentialProvider.nsi
 ├── content/
-│   ├── WireGuardCredentialProvider.dll  ← von build.bat kopiert
-│   ├── WireGuardShutdownService.exe     ← von build.bat kopiert
-│   ├── configure.reg                    ← Standard-Konfiguration
+│   ├── WireGuardCredentialProvider.dll  ← copied by build.bat
+│   ├── WireGuardShutdownService.exe     ← copied by build.bat
+│   ├── configure.reg                    ← default configuration
 │   ├── docs/
 │   │   └── LICENSE.rtf
 │   └── img/
-│       ├── wgcp.ico         ← Installer-Icon (16/32/48px, WireGuard-Original)
-│       ├── wizard.bmp       ← Willkommens-Bild (164×314px)
-│       └── header.bmp       ← Header-Banner (150×57px)
+│       ├── wgcp.ico         ← installer icon (16/32/48px, WireGuard original)
+│       ├── wizard.bmp       ← welcome image (164×314px)
+│       └── header.bmp       ← header banner (150×57px)
 ```

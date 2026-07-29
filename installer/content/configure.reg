@@ -1,63 +1,63 @@
 Windows Registry Editor Version 5.00
 
 ; ============================================================
-; WireGuard Credential Provider - Konfiguration
+; WireGuard Credential Provider - Configuration
 ; ============================================================
 
-[HKEY_LOCAL_MACHINE\SOFTWARE\WireGuardCredentialProvider]
+[HKEY_LOCAL_MACHINE\SOFTWARE\Jens Kaesler\WireGuard Credential Provider]
 
-; Pfad zur wireguard.exe
+; Path to wireguard.exe
 "ExePath"="C:\\Program Files\\WireGuard\\wireguard.exe"
 
-; Pfad zur wg.exe (Traffic-Statistiken)
+; Path to wg.exe (traffic statistics)
 "WgExePath"="C:\\Program Files\\WireGuard\\wg.exe"
 
-; Text auf der Kachel
+; Label shown on the tile
 "TileLabel"="WireGuard VPN"
 
-; Eigene Icons (optional - leer lassen = eingebettete Ressource wird verwendet)
+; Custom icons (optional - leave empty to use embedded resource)
 "IconConnected"=""
 "IconDisconnected"=""
 
-; Logdatei-Pfad
-; Platzhalter ddMMyyyy wird durch das aktuelle Datum ersetzt
-; %INSTALLDIR% wird durch das Installationsverzeichnis ersetzt (vom Installer gesetzt)
-; Beispiel: C:\Program Files\Jens Kaesler\WireGuard Credential Provider\logs\wgcp_23072026.log
+; Log file path
+; Placeholder ddMMyyyy is replaced with the current date
+; %INSTALLDIR% is replaced with the installation directory (set by installer)
+; Example: C:\Program Files\Jens Kaesler\WireGuard Credential Provider\logs\wgcp_23072026.log
 "LogPath"=""
 
-; Log-Level: 0=aus, 1=CRIT (Standard), 2=WARN+CRIT, 3=DEBUG+WARN+CRIT
+; Log level: 0=off, 1=CRIT (default), 2=WARN+CRIT, 3=DEBUG+WARN+CRIT
 "LogLevel"=dword:00000001
 
-; Log-Rotation: Logs aelter als diese Anzahl Tage werden beim Start geloescht
+; Log rotation: logs older than this number of days are deleted on startup
 "LogRetentionDays"=dword:00000007
 
 ; ============================================================
-; Smartcard / YubiKey PIV Konfiguration
+; Smartcard / YubiKey PIV Configuration
 ; ============================================================
 
-; Smartcard-Authentifizierung aktivieren (0=aus, 1=ein)
+; Enable smartcard authentication (0=off, 1=on)
 "SmartcardEnabled"=dword:00000000
 
-; PIN-Eingabe erforderlich (0=nein, 1=ja)
+; PIN required (0=no, 1=yes)
 "SmartcardPinRequired"=dword:00000001
 
-; Minimale PIN-Laenge
+; Minimum PIN length
 "SmartcardPinMinLength"=dword:00000004
 
-; Maximale Fehlversuche bevor Warnung
+; Maximum failed attempts before warning
 "SmartcardPinMaxAttempts"=dword:00000003
 
-; Sekunden warten auf Karte bevor Timeout
+; Seconds to wait for card before timeout
 "SmartcardTimeout"=dword:0000000A
 
-; Tunnel automatisch verbinden wenn YubiKey eingesteckt wird (0=nein, 1=ja)
+; Automatically connect tunnel when YubiKey is inserted (0=no, 1=yes)
 "SmartcardConnectOnInsert"=dword:00000000
 
-; Tunnel automatisch trennen wenn YubiKey entfernt wird (0=nein, 1=ja)
+; Automatically disconnect tunnel when YubiKey is removed (0=no, 1=yes)
 "SmartcardDisconnectOnRemove"=dword:00000000
 
-; Bestimmten Reader erzwingen (leer = erster verfuegbarer)
+; Restrict to a specific reader (empty = first available)
 "SmartcardReaderName"=""
 
-; SHA1-Thumbprint des erwarteten Zertifikats (leer = jedes PIV-Zertifikat)
+; SHA1 thumbprint of expected certificate (empty = any PIV certificate)
 "SmartcardCertThumbprint"=""

@@ -1,11 +1,11 @@
 ; ============================================================
 ; WireGuard Credential Provider - NSIS Installer
 ; ============================================================
-; Anforderungen:
+; Requirements:
 ;   - NSIS 3.x
 ;   - nsProcess Plugin  (https://nsis.sourceforge.io/NsProcess_plugin)
 ;   - SimpleSC Plugin   (https://nsis.sourceforge.io/NSIS_Simple_Service_Plugin)
-;   - MUI2 (in NSIS enthalten)
+;   - MUI2 (included with NSIS)
 ; ============================================================
 
 Unicode true
@@ -20,14 +20,14 @@ Unicode true
 !include "x64.nsh"
 
 ; ============================================================
-; Versionsinfo - feste Version da DLL noch keine RC-Version traegt
-; Nach einem Rebuild mit der neuen RC-Datei kann stattdessen verwendet werden:
+; Version info - fixed version since DLL does not yet carry RC version
+; After a rebuild with the new RC file, this can be used instead:
 ;   !getdllversion "content\WireGuardCredentialProvider.dll" DLL_VER_
 ;   !define VERSION      "${DLL_VER_1}.${DLL_VER_2}.${DLL_VER_3}.${DLL_VER_4}"
 ;   !define VERSION_DISP "${DLL_VER_1}.${DLL_VER_2}.${DLL_VER_3}"
 ; ============================================================
-!define VERSION      "2026.7.5.0"
-!define VERSION_DISP "2026.7.5"
+!define VERSION      "2026.7.6.0"
+!define VERSION_DISP "2026.7.6"
 
 ; ============================================================
 ; Konstanten
@@ -52,7 +52,7 @@ Unicode true
 !define SVC_NAME       "WireGuardShutdownHelper"
 
 ; ============================================================
-; MUI Interface-Einstellungen
+; MUI interface settings
 ; ============================================================
 !define MUI_ABORTWARNING
 !define MUI_ICON    "content\img\wgcp.ico"
@@ -77,7 +77,7 @@ Unicode true
 !define MUI_UNFINISHPAGE_NOAUTOCLOSE
 
 ; ============================================================
-; Seiten - Installer
+; Pages - Installer
 ; ============================================================
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE   "content\docs\LICENSE.rtf"
@@ -87,7 +87,7 @@ Unicode true
 !insertmacro MUI_PAGE_FINISH
 
 ; ============================================================
-; Seiten - Deinstaller
+; Pages - Uninstaller
 ; ============================================================
 !insertmacro MUI_UNPAGE_WELCOME
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -96,18 +96,18 @@ Unicode true
 !insertmacro MUI_UNPAGE_FINISH
 
 ; ============================================================
-; Sprachen (Deutsch zuerst = Standard)
-; WICHTIG: LangStrings erst NACH den Language-Includes!
+; Languages (German first = default)
+; IMPORTANT: LangStrings must come AFTER the Language includes!
 ; ============================================================
 !insertmacro MUI_LANGUAGE "German"
 !insertmacro MUI_LANGUAGE "English"
 
 ; ============================================================
-; Sprachstrings - muessen nach MUI_LANGUAGE stehen
-; Alle Strings einer Sprache zusammen definieren
+; Language strings - must appear after MUI_LANGUAGE
+; Define all strings for one language together
 ; ============================================================
 
-; --- Deutsch ---
+; --- German ---
 LangString DESC_SecMain         ${LANG_GERMAN} "Installiert den Credential Provider und den Shutdown-Dienst auf Ihrem System."
 LangString DESC_SecConfig       ${LANG_GERMAN} "Schreibt die Standard-Konfiguration in die Registry (kann jederzeit angepasst werden)."
 LangString DESC_SecUninstall    ${LANG_GERMAN} "Entfernt den Credential Provider und den Shutdown-Dienst."
@@ -134,7 +134,7 @@ LangString MSG_REGSVR           ${LANG_ENGLISH} "Registering Credential Provider
 LangString MSG_UNREG            ${LANG_ENGLISH} "Unregistering Credential Provider..."
 
 ; ============================================================
-; Allgemein
+; General
 ; ============================================================
 BrandingText "${APPNAME} ${VERSION_DISP} by ${PUBLISHER}"
 Name          "${APPNAME}"
@@ -156,20 +156,20 @@ ManifestSupportedOS all
 !insertmacro MUI_RESERVEFILE_LANGDLL
 
 ; ============================================================
-; Versions-Metadaten
+; Version metadata
 ; ============================================================
 VIProductVersion                  "${VERSION}"
 VIAddVersionKey "ProductName"     "${APPNAME}"
 VIAddVersionKey "CompanyName"     "${PUBLISHER}"
 VIAddVersionKey "LegalCopyright"  "${COPYRIGHT}"
-VIAddVersionKey "FileDescription" "Installer fuer ${APPNAME}"
+VIAddVersionKey "FileDescription" "Installer for ${APPNAME}"
 VIAddVersionKey "FileVersion"     "${VERSION}"
 VIAddVersionKey "ProductVersion"  "${VERSION}"
 VIAddVersionKey "InternalName"    "${INSTALLERNAME}"
 VIAddVersionKey "OriginalFilename" "${INSTALLERNAME}.exe"
 
 ; ============================================================
-; Installer-Sektionen
+; Installer sections
 ; ============================================================
 SectionGroup /e "${APPNAME}" SecGrpInstall
 
@@ -183,56 +183,56 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
         SetOverwrite on
         SetOutPath "$INSTDIR"
 
-        ; System32-Pfad explizit setzen (verhindert SysWOW64-Umleitung)
+        ; Set System32 path explicitly (prevents SysWOW64 redirection)
         StrCpy $9 "$WINDIR\System32"
 
-        ; 64-Bit Filesystem-Redirector deaktivieren
-        ; (NSIS ist 32-Bit, ohne dies landet alles in SysWOW64)
+        ; Disable 64-bit filesystem redirector
+        ; (NSIS is 32-bit; without this, files land in SysWOW64)
         ${DisableX64FSRedirection}
 
         DetailPrint "$(MSG_SVC_STOP)"
         Call StopService
 
-        ; LogonUI beenden damit DLL-Sperre aufgehoben wird (Windows startet es automatisch neu)
-        DetailPrint "Bereite Installation vor..."
+        ; Kill LogonUI to release DLL lock (Windows restarts it automatically)
+        DetailPrint "Preparing installation..."
         ExecWait 'regsvr32.exe /s /u "$9\WireGuardCredentialProvider.dll"'
         ExecWait 'taskkill.exe /F /IM LogonUI.exe'
         Sleep 1500
 
-        ; Dateien ins Installationsverzeichnis
+        ; Files into installation directory
         File "content\WireGuardCredentialProvider.dll"
         File "content\WireGuardShutdownService.exe"
         File "content\configure.reg"
         File "content\img\wireguard.ico"
 
-        ; DLL nach System32 kopieren via robocopy (64-Bit Prozess, kein WOW64 Redirect)
-        DetailPrint "Kopiere DLL nach $9..."
+        ; Copy DLL to System32 via robocopy (64-bit process, no WOW64 redirect)
+        DetailPrint "Copying DLL to $9..."
         ExecWait 'robocopy.exe "$INSTDIR" "$9" WireGuardCredentialProvider.dll /IS /IT /NJH /NJS /NFL /NDL'
 
-        ; Existenz via dir-Befehl prüfen (umgeht WOW64 FileExists-Problem)
+        ; Verify existence via dir command (works around WOW64 FileExists issue)
         ExecWait 'cmd.exe /c if not exist "$9\WireGuardCredentialProvider.dll" exit 1' $R8
         ${If} $R8 != 0
             ${EnableX64FSRedirection}
-            MessageBox MB_OK|MB_ICONSTOP "Konnte DLL nicht nach $9 kopieren.$\nBitte als Administrator starten."
+            MessageBox MB_OK|MB_ICONSTOP "Could not copy DLL to $9.$\nPlease run as Administrator."
             Abort
         ${EndIf}
 
-        ; Registrieren
+        ; Register
         DetailPrint "$(MSG_REGSVR)"
         ExecWait 'regsvr32.exe /s "$9\WireGuardCredentialProvider.dll"' $R9
         ${If} $R9 != 0
             ${EnableX64FSRedirection}
-            MessageBox MB_OK|MB_ICONSTOP "Registrierung fehlgeschlagen (Exit-Code $R9).$\nPfad: $9\WireGuardCredentialProvider.dll"
+            MessageBox MB_OK|MB_ICONSTOP "Registration failed (exit code $R9).$\nPath: $9\WireGuardCredentialProvider.dll"
         ${Else}
-            DetailPrint "Credential Provider registriert."
+            DetailPrint "Credential Provider registered."
         ${EndIf}
 
-        ; Shutdown-Service via robocopy nach System32
+        ; Copy Shutdown Service to System32 via robocopy
         ExecWait 'robocopy.exe "$INSTDIR" "$9" WireGuardShutdownService.exe /NJH /NJS /NFL /NDL'
         ExecWait '"$9\WireGuardShutdownService.exe" /install'
         DetailPrint "$(MSG_SVC_START)"
 
-        ; Filesystem-Redirector wieder aktivieren
+        ; Re-enable filesystem redirector
         ${EnableX64FSRedirection}
 
         WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -260,20 +260,20 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
 
     SectionEnd
 
-    Section "$(^Name) - Konfiguration / Configuration" SecConfig
+    Section "$(^Name) - Configuration" SecConfig
         SectionIn 1
         SetRegView 64
 
-        ; InstallDir und LogVerzeichnis immer setzen/aktualisieren
+        ; Always set/update InstallDir and logs directory
         WriteRegStr HKLM "${REG_WGCP}" "InstallDir" "$INSTDIR"
         CreateDirectory "$INSTDIR\logs"
 
-        ; Konfigurationswerte nur bei Erstinstallation schreiben
-        ; (vorhandene Werte werden nicht ueberschrieben)
+        ; Write config values only on first install
+        ; (existing values are not overwritten)
         ClearErrors
         ReadRegStr $R0 HKLM "${REG_WGCP}" "ExePath"
         ${If} $R0 == ""
-            DetailPrint "Schreibe Standard-Konfiguration..."
+            DetailPrint "Writing default configuration..."
 
             WriteRegStr   HKLM "${REG_WGCP}" "ExePath"          "$PROGRAMFILES64\WireGuard\wireguard.exe"
             WriteRegStr   HKLM "${REG_WGCP}" "WgExePath"        "$PROGRAMFILES64\WireGuard\wg.exe"
@@ -283,7 +283,7 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
             WriteRegStr   HKLM "${REG_WGCP}" "LogPath"          ""
             WriteRegDWORD HKLM "${REG_WGCP}" "LogLevel"         1
             WriteRegDWORD HKLM "${REG_WGCP}" "LogRetentionDays" 7
-            ; Smartcard (Standard: deaktiviert)
+            ; Smartcard (default: disabled)
             WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardEnabled"            0
             WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardPinRequired"        1
             WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardPinMinLength"       4
@@ -294,19 +294,19 @@ SectionGroup /e "${APPNAME}" SecGrpInstall
             WriteRegStr   HKLM "${REG_WGCP}" "SmartcardReaderName"         ""
             WriteRegStr   HKLM "${REG_WGCP}" "SmartcardCertThumbprint"     ""
 
-            DetailPrint "Standard-Konfiguration geschrieben."
+            DetailPrint "Default configuration written."
         ${Else}
-            DetailPrint "Vorhandene Konfiguration beibehalten (ExePath: $R0)."
+            DetailPrint "Existing configuration preserved (ExePath: $R0)."
         ${EndIf}
 
-        DetailPrint "Log-Verzeichnis: $INSTDIR\logs"
+        DetailPrint "Log directory: $INSTDIR\logs"
 
     SectionEnd
 
 SectionGroupEnd
 
 ; ============================================================
-; Deinstaller-Sektionen
+; Uninstaller sections
 ; ============================================================
 SectionGroup /e "un.${APPNAME}" SecGrpUninstall
 
@@ -334,16 +334,16 @@ SectionGroup /e "un.${APPNAME}" SecGrpUninstall
 
     SectionEnd
 
-    Section /o "un.Einstellungen / Settings" SecUninstallCfg
+    Section /o "un.Settings" SecUninstallCfg
         SetRegView 64
         DeleteRegKey HKLM "${REG_WGCP}"
-        DetailPrint "Registry-Konfiguration entfernt."
+        DetailPrint "Registry configuration removed."
     SectionEnd
 
 SectionGroupEnd
 
 ; ============================================================
-; Sektionsbeschreibungen
+; Section descriptions
 ; ============================================================
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
     !insertmacro MUI_DESCRIPTION_TEXT ${SecMain}   "$(DESC_SecMain)"
@@ -356,7 +356,7 @@ SectionGroupEnd
 !insertmacro MUI_UNFUNCTION_DESCRIPTION_END
 
 ; ============================================================
-; Installer - Initialisierung
+; Installer initialization
 ; ============================================================
 Function .onInit
     !insertmacro MUI_LANGDLL_DISPLAY
@@ -369,7 +369,7 @@ Function .onInit
 FunctionEnd
 
 ; ============================================================
-; Deinstaller - Initialisierung
+; Uninstaller initialization
 ; ============================================================
 Function un.onInit
     !insertmacro MUI_UNGETLANGUAGE
@@ -377,7 +377,7 @@ Function un.onInit
 FunctionEnd
 
 ; ============================================================
-; Hilfsfunktionen
+; Helper functions
 ; ============================================================
 
 Function CheckWireGuard
@@ -403,12 +403,12 @@ Function CheckUpgrade
 
     MessageBox MB_YESNO|MB_ICONQUESTION "$(MSG_UPGRADE)" IDYES do_upgrade IDNO do_fresh
     do_upgrade:
-        DetailPrint "Aktualisiere bestehende Installation (Version $R0)..."
+        DetailPrint "Updating existing installation (version $R0)..."
         Call StopService
         ExecWait 'regsvr32.exe /s /u "$SYSDIR\WireGuardCredentialProvider.dll"'
         Return
     do_fresh:
-        DetailPrint "Entferne Vorversion..."
+        DetailPrint "Removing previous version..."
         ReadRegStr $R1 HKLM "${REG_APP}" "InstallDir"
         ${If} ${FileExists} "$R1\Uninstall.exe"
             ExecWait '"$R1\Uninstall.exe" /S'

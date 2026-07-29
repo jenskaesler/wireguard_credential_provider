@@ -94,7 +94,7 @@ HRESULT WireGuardProvider::_EnumerateCredentials()
     if (_pCredential) { _pCredential->Release(); _pCredential=nullptr; }
     WireGuardCredential* p=new(std::nothrow) WireGuardCredential();
     if (!p) return E_OUTOFMEMORY;
-    p->_pProvider = this;  // Rueckzeiger setzen
+    p->_pProvider = this;  // back-pointer
     HRESULT hr=p->Initialize(_cpus,g_rgFields,g_rgFieldStates);
     if (SUCCEEDED(hr)) _pCredential=p; else p->Release();
     return hr;

@@ -1,12 +1,12 @@
 //
 // WireGuardShutdownService.cpp
 //
-// Minimaler Windows Service der NUR beim PC-Shutdown (PRESHUTDOWN) alle
-// aktiven WireGuard-Tunnel trennt. Er tut sonst NICHTS.
+// Minimal Windows service that ONLY disconnects all active WireGuard tunnels
+// on PC shutdown (PRESHUTDOWN). It does nothing else.
 //
-// Installation:  WireGuardShutdownService.exe /install
-// Deinstallation: WireGuardShutdownService.exe /uninstall
-// Manueller Test: WireGuardShutdownService.exe /run
+// Install:   WireGuardShutdownService.exe /install
+// Uninstall: WireGuardShutdownService.exe /uninstall
+// Test:      WireGuardShutdownService.exe /run
 //
 
 #define WIN32_LEAN_AND_MEAN
@@ -20,9 +20,9 @@
 
 #define SVC_NAME        L"WireGuardShutdownHelper"
 #define SVC_DISPLAY     L"WireGuard Shutdown Helper"
-#define SVC_DESC        L"Trennt aktive WireGuard-Tunnel beim Herunterfahren des PCs."
+#define SVC_DESC        L"Disconnects active WireGuard tunnels on PC shutdown."
 
-#define REG_KEY         L"SOFTWARE\\WireGuardCredentialProvider"
+#define REG_KEY         L"SOFTWARE\\Jens Kaesler\\WireGuard Credential Provider"
 #define REG_EXEPATH     L"ExePath"
 #define DEFAULT_EXEPATH L"C:\\Program Files\\WireGuard\\wireguard.exe"
 #define WG_CONFIG_DIR   L"C:\\Program Files\\WireGuard\\Data\\Configurations\\"
@@ -113,8 +113,8 @@ static void GetExePath(WCHAR* pwszOut, DWORD cchOut)
 }
 
 // ---------------------------------------------------------------------------
-// Hauptaufgabe: alle aktiven Tunnel trennen
-// Wird NUR beim PRESHUTDOWN-Event aufgerufen
+// Main task: disconnect all active tunnels
+// Called ONLY on the PRESHUTDOWN event
 // ---------------------------------------------------------------------------
 static void DisconnectAllTunnels()
 {
@@ -125,7 +125,7 @@ static void DisconnectAllTunnels()
     int nProfiles = EnumProfiles(profiles, MAX_PROFILES);
 
     WCHAR wszLog[MAX_BUF] = {};
-    StringCchPrintfW(wszLog, MAX_BUF, L"Shutdown: %d Profile gefunden, pruefe Verbindungen...", nProfiles);
+    StringCchPrintfW(wszLog, MAX_BUF, L"Shutdown: %d profile(s) found, checking connections...", nProfiles);
     LogEvent(wszLog);
 
     int nDisconnected = 0;
@@ -148,28 +148,28 @@ static void DisconnectAllTunnels()
             CloseHandle(pi.hThread);
             nDisconnected++;
 
-            StringCchPrintfW(wszLog, MAX_BUF, L"Tunnel '%s' beim Shutdown getrennt.", profiles[i]);
+            StringCchPrintfW(wszLog, MAX_BUF, L"Tunnel '%s' disconnected during shutdown.", profiles[i]);
             LogEvent(wszLog);
         }
         else
         {
             StringCchPrintfW(wszLog, MAX_BUF,
-                             L"Fehler beim Trennen von '%s': %lu", profiles[i], GetLastError());
+                             L"Error disconnecting '%s': %lu", profiles[i], GetLastError());
             LogEvent(wszLog);
         }
     }
 
     if (nDisconnected == 0)
-        LogEvent(L"Shutdown: Keine aktiven WireGuard-Tunnel gefunden.");
+        LogEvent(L"Shutdown: No active WireGuard tunnels found.");
     else
     {
-        StringCchPrintfW(wszLog, MAX_BUF, L"Shutdown: %d Tunnel(s) getrennt.", nDisconnected);
+        StringCchPrintfW(wszLog, MAX_BUF, L"Shutdown: %d tunnel(s) disconnected.", nDisconnected);
         LogEvent(wszLog);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Service Control Handler
+// Service control handler
 // ---------------------------------------------------------------------------
 static DWORD WINAPI SvcCtrlHandler(DWORD dwCtrl, DWORD, LPVOID, LPVOID)
 {
@@ -181,8 +181,8 @@ static DWORD WINAPI SvcCtrlHandler(DWORD dwCtrl, DWORD, LPVOID, LPVOID)
         return NO_ERROR;
 
     case SERVICE_CONTROL_PRESHUTDOWN:
-        // Das ist der Moment den wir brauchen
-        LogEvent(L"PRESHUTDOWN empfangen - trenne alle WireGuard-Tunnel...");
+        // This is the moment we need
+        LogEvent(L"PRESHUTDOWN received - disconnecting all WireGuard tunnels...");
         SetSvcStatus(SERVICE_STOP_PENDING);
         DisconnectAllTunnels();
         SetEvent(g_hStopEvent);
@@ -195,7 +195,7 @@ static DWORD WINAPI SvcCtrlHandler(DWORD dwCtrl, DWORD, LPVOID, LPVOID)
 }
 
 // ---------------------------------------------------------------------------
-// Service Main - wartet einfach nur auf PRESHUTDOWN oder STOP
+// Service main - simply waits for PRESHUTDOWN or STOP
 // ---------------------------------------------------------------------------
 static VOID WINAPI ServiceMain(DWORD, LPWSTR*)
 {
@@ -205,7 +205,7 @@ static VOID WINAPI ServiceMain(DWORD, LPWSTR*)
     g_hStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!g_hStopEvent) { SetSvcStatus(SERVICE_STOPPED); return; }
 
-    // PRESHUTDOWN + STOP akzeptieren, sonst nichts
+    // Accept PRESHUTDOWN + STOP, nothing else
     SERVICE_STATUS ss = {};
     ss.dwServiceType      = SERVICE_WIN32_OWN_PROCESS;
     ss.dwCurrentState     = SERVICE_RUNNING;
@@ -213,9 +213,9 @@ static VOID WINAPI ServiceMain(DWORD, LPWSTR*)
     ss.dwWin32ExitCode    = NO_ERROR;
     SetServiceStatus(g_hSvcStatus, &ss);
 
-    LogEvent(L"WireGuard Shutdown Helper laeuft - wartet auf Shutdown.");
+    LogEvent(L"WireGuard Shutdown Helper is running - waiting for shutdown.");
 
-    // Blockieren bis STOP oder PRESHUTDOWN
+    // Block until STOP or PRESHUTDOWN
     WaitForSingleObject(g_hStopEvent, INFINITE);
 
     CloseHandle(g_hStopEvent);
@@ -232,7 +232,7 @@ static void Install()
     GetModuleFileNameW(nullptr, wszPath, MAX_PATH);
 
     SC_HANDLE hSCM = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CREATE_SERVICE);
-    if (!hSCM) { wprintf(L"OpenSCManager Fehler: %lu\n", GetLastError()); return; }
+    if (!hSCM) { wprintf(L"OpenSCManager error: %lu\n", GetLastError()); return; }
 
     SC_HANDLE hSvc = CreateServiceW(
         hSCM, SVC_NAME, SVC_DISPLAY,
@@ -245,7 +245,7 @@ static void Install()
         DWORD dwErr = GetLastError();
         if (dwErr == ERROR_SERVICE_EXISTS)
         {
-            wprintf(L"Service existiert bereits - aktualisiere...\n");
+            wprintf(L"Service already exists - updating...\n");
             hSvc = OpenServiceW(hSCM, SVC_NAME, SERVICE_CHANGE_CONFIG | SERVICE_START);
             if (hSvc) ChangeServiceConfigW(hSvc, SERVICE_NO_CHANGE, SERVICE_AUTO_START,
                                            SERVICE_NO_CHANGE, wszPath, nullptr, nullptr,
@@ -253,7 +253,7 @@ static void Install()
         }
         else
         {
-            wprintf(L"CreateService Fehler: %lu\n", dwErr);
+            wprintf(L"CreateService error: %lu\n", dwErr);
             CloseServiceHandle(hSCM); return;
         }
     }
@@ -263,13 +263,13 @@ static void Install()
         SERVICE_DESCRIPTIONW desc = { const_cast<LPWSTR>(SVC_DESC) };
         ChangeServiceConfig2W(hSvc, SERVICE_CONFIG_DESCRIPTION, &desc);
 
-        // 30 Sekunden fuer Tunnel-Trennung beim Shutdown
+        // 30 seconds for tunnel disconnection during shutdown
         SERVICE_PRESHUTDOWN_INFO psi = { 30000 };
         ChangeServiceConfig2W(hSvc, SERVICE_CONFIG_PRESHUTDOWN_INFO, &psi);
 
-        wprintf(L"Service installiert. Starte...\n");
+        wprintf(L"Service installed. Starting...\n");
         StartServiceW(hSvc, 0, nullptr);
-        wprintf(L"Fertig. Service '%s' laeuft.\n", SVC_NAME);
+        wprintf(L"Done. Service '%s' is running.\n", SVC_NAME);
         CloseServiceHandle(hSvc);
     }
     CloseServiceHandle(hSCM);
@@ -278,18 +278,18 @@ static void Install()
 static void Uninstall()
 {
     SC_HANDLE hSCM = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
-    if (!hSCM) { wprintf(L"OpenSCManager Fehler: %lu\n", GetLastError()); return; }
+    if (!hSCM) { wprintf(L"OpenSCManager error: %lu\n", GetLastError()); return; }
 
     SC_HANDLE hSvc = OpenServiceW(hSCM, SVC_NAME,
                                   SERVICE_STOP | DELETE | SERVICE_QUERY_STATUS);
-    if (!hSvc) { wprintf(L"Service nicht gefunden.\n"); CloseServiceHandle(hSCM); return; }
+    if (!hSvc) { wprintf(L"Service not found.\n"); CloseServiceHandle(hSCM); return; }
 
     SERVICE_STATUS ss = {};
     ControlService(hSvc, SERVICE_CONTROL_STOP, &ss);
     Sleep(1500);
 
-    DeleteService(hSvc) ? wprintf(L"Service entfernt.\n")
-                        : wprintf(L"Fehler: %lu\n", GetLastError());
+    DeleteService(hSvc) ? wprintf(L"Service removed.\n")
+                        : wprintf(L"Error: %lu\n", GetLastError());
     CloseServiceHandle(hSvc);
     CloseServiceHandle(hSCM);
 }
@@ -302,12 +302,12 @@ int wmain(int argc, wchar_t* argv[])
         if (_wcsicmp(argv[1], L"/uninstall") == 0) { Uninstall(); return 0; }
         if (_wcsicmp(argv[1], L"/run") == 0)
         {
-            wprintf(L"Manueller Test: Trenne alle aktiven WireGuard-Tunnel...\n");
+            wprintf(L"Manual test: Disconnecting all active WireGuard tunnels...\n");
             DisconnectAllTunnels();
-            wprintf(L"Fertig.\n");
+            wprintf(L"Done.\n");
             return 0;
         }
-        wprintf(L"Verwendung: %s [/install | /uninstall | /run]\n", argv[0]);
+        wprintf(L"Usage: %s [/install | /uninstall | /run]\n", argv[0]);
         return 1;
     }
 

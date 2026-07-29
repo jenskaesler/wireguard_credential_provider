@@ -2,17 +2,17 @@
 //
 // WireGuardProvider.h
 //
-// Implementierung von ICredentialProvider.
-// Registriert den Credential Provider bei Windows und verwaltet
-// die Lebenszeit des WireGuardCredential-Objekts.
+// Implementation of ICredentialProvider.
+// Registers the Credential Provider with Windows and manages
+// the lifetime of the WireGuardCredential object.
 //
 
 #include "helpers.h"
 
 class WireGuardCredential;
 
-// CLSID des Credential Providers
-// Muss mit dem Eintrag in DllRegisterServer übereinstimmen.
+// CLSID of the Credential Provider
+// Must match the entry in DllRegisterServer.
 // {4A1B2C3D-4E5F-6789-ABCD-EF0123456789}
 static const CLSID CLSID_WireGuardProvider =
 { 0x4A1B2C3D, 0x4E5F, 0x6789, { 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89 } };
@@ -37,7 +37,7 @@ public:
     STDMETHODIMP GetCredentialAt(DWORD dwIndex,
                                   ICredentialProviderCredential** ppcpc);
 
-    // Benachrichtigung an LogonUI dass sich der Status geändert hat
+    // Notify LogonUI that the status has changed
     void NotifyStatusChanged()
     {
         if (_pcpe) _pcpe->CredentialsChanged(_upAdviseContext);

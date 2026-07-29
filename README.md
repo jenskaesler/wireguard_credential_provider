@@ -1,81 +1,80 @@
 # 🔐 WireGuard Credential Provider
 
-> Verbinde dein WireGuard-VPN direkt vom Windows-Anmeldebildschirm aus – noch bevor du dich einloggst.
+> Connect your WireGuard VPN directly from the Windows login screen – before you log in.
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
 [![Language](https://img.shields.io/badge/Language-C%2B%2B17-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
-[![License](https://img.shields.io/badge/Lizenz-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-2026.7.4-blue)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![Version](https://img.shields.io/badge/Version-2026.7.6-blue)](CHANGELOG.md)
 [![WireGuard](https://img.shields.io/badge/WireGuard-Windows-88171A?logo=wireguard&logoColor=white)](https://www.wireguard.com/install/)
 
 ---
 
-## 🤔 Warum gibt es das?
+## 🤔 Why does this exist?
 
-Domain-joined Windows-Clients stehen vor einem klassischen Henne-Ei-Problem: Der Benutzer muss sich anmelden, um eine VPN-Verbindung herzustellen – aber die VPN-Verbindung wird benötigt, damit der Domänencontroller für die Anmeldung erreichbar ist.
+Domain-joined Windows clients face a classic chicken-and-egg problem: the user needs to log in to establish a VPN connection – but the VPN connection is required to reach the domain controller for authentication.
 
-Viele kommerzielle VPN-Clients lösen das mit einer "Pre-Logon"-Funktion. **WireGuard für Windows bietet diese Funktion nicht** – bis jetzt.
+Many commercial VPN clients solve this with a "pre-logon" feature. **WireGuard for Windows does not offer this functionality** – until now.
 
-Der **WireGuard Credential Provider** ergänzt den Windows-Anmeldebildschirm um eine eigene Kachel, über die Tunnel direkt vor der Anmeldung gestartet und gestoppt werden können.
+The **WireGuard Credential Provider** adds a dedicated tile to the Windows login screen, allowing tunnels to be started and stopped directly before signing in.
 
 ---
 
 ## ✨ Features
 
-- 🔌 **Pre-Logon VPN** – Tunnel verbinden und trennen bevor Windows-Anmeldung
-- 📋 **Profil-Auswahl** – Dropdown mit allen vorhandenen `.conf.dpapi`-Konfigurationen
-- 🎯 **Automatisches Standardprofil** – erkennt eine Konfiguration die dem Computernamen entspricht (z.B. `LT260430.conf.dpapi`)
-- 🟢🔴 **Farbige Status-Icons** – grünes Icon bei aktiver Verbindung, rotes bei getrennter
-- ⏱️ **Live-Verbindungszeit** – zeigt wie lange der Tunnel bereits aktiv ist
-- 📊 **Traffic-Statistiken** – Up-/Download-Durchsatz in Echtzeit (via `wg.exe`)
-- 🔄 **Auto-Refresh** – Status und Traffic werden alle 5 Sekunden automatisch aktualisiert
-- 🛑 **Sauberer Shutdown** – separater Windows-Dienst trennt alle Tunnel beim Herunterfahren
-- ⚙️ **Vollständig konfigurierbar** – alle Pfade und Texte über die Windows-Registry
-- 📝 **Strukturiertes Logging** – konfigurierbare Log-Ebenen (CRIT / WARN / DEBUG)
-- 🏢 **GPO-fähig** – Registry-Konfiguration lässt sich per Group Policy verteilen
+- 🔌 **Pre-Logon VPN** – connect and disconnect tunnels before Windows login
+- 📋 **Profile selection** – dropdown listing all available `.conf.dpapi` configurations
+- 🎯 **Automatic default profile** – detects a configuration matching the computer name (e.g. `LT260430.conf.dpapi`)
+- 🟢🔴 **Color-coded status icons** – green icon when connected, red when disconnected
+- ⏱️ **Live connection timer** – shows how long the tunnel has been active
+- 📊 **Traffic statistics** – real-time upload/download throughput (via `wg.exe`)
+- 🔄 **Auto-refresh** – status and traffic update automatically every 5 seconds
+- 🛑 **Clean shutdown** – a separate Windows service disconnects all tunnels on shutdown
+- ⚙️ **Fully configurable** – all paths and labels via the Windows Registry
+- 📝 **Structured logging** – configurable log levels (CRIT / WARN / DEBUG)
+- 🏢 **GPO-ready** – Registry configuration can be distributed via Group Policy
 
 ---
 
-## 📋 Voraussetzungen
+## 📋 Prerequisites
 
-| Komponente | Version |
+| Component | Version |
 |---|---|
-| Windows | 10 oder 11 (x64) |
-| WireGuard für Windows | [aktuelle Version](https://www.wireguard.com/install/) |
-| Visual Studio | 2022 oder 2026 |
+| Windows | 10 or 11 (x64) |
+| WireGuard for Windows | [latest version](https://www.wireguard.com/install/) |
+| Visual Studio | 2022 or newer |
 | Windows SDK | 10.0 |
-| C++ Workload | Desktop-Entwicklung mit C++ |
+| C++ Workload | Desktop development with C++ |
 
 ---
 
-## 🏗️ Projektstruktur
+## 🏗️ Project Structure
 
 ```
 WireGuardCredentialProvider/
 │
 ├── src/
-│   ├── helpers.h                       – Registry-Helfer, Logging, WireGuard-Funktionen
-│   ├── FieldDescriptors.h              – Zentrale Felddefinitionen (kein Duplikat)
-│   ├── WireGuardProvider.h/.cpp        – ICredentialProvider (Rahmen, Enumeration)
-│   ├── WireGuardCredential.h/.cpp      – ICredentialProviderCredential (Kachel, Logik)
-│   ├── dll.cpp                         – DllMain, DllGetClassObject, regsvr32-Exports
-│   └── WireGuardCredentialProvider.def – DLL-Exportdefinitionen
+│   ├── helpers.h                       – Registry helpers, logging, WireGuard functions
+│   ├── FieldDescriptors.h              – Central field definitions (no duplication)
+│   ├── WireGuardProvider.h/.cpp        – ICredentialProvider (frame, enumeration)
+│   ├── WireGuardCredential.h/.cpp      – ICredentialProviderCredential (tile, logic)
+│   ├── dll.cpp                         – DllMain, DllGetClassObject, regsvr32 exports
+│   └── WireGuardCredentialProvider.def – DLL export definitions
 │
 ├── resources/
-│   ├── resource.h                      – Ressourcen-IDs
-│   ├── WireGuardCredentialProvider.rc  – Ressourcen-Skript (eingebettete Icons)
-│   ├── wireguard_connected.bmp         – Icon bei aktiver Verbindung (128×128, grün)
-│   └── wireguard_disconnected.bmp      – Icon bei getrennter Verbindung (128×128, rot)
+│   ├── resource.h                      – Resource IDs
+│   ├── WireGuardCredentialProvider.rc  – Resource script (embedded icons)
+│   ├── wireguard_connected.bmp         – Icon when connected (128×128, green)
+│   └── wireguard_disconnected.bmp      – Icon when disconnected (128×128, red)
 │
 ├── shutdown-service/
 │   ├── WireGuardShutdownService.vcxproj
 │   └── src/
-│       └── WireGuardShutdownService.cpp – Windows-Dienst für sauberen Shutdown
+│       └── WireGuardShutdownService.cpp – Windows service for clean shutdown
 │
-├── deploy/
-│   ├── install.bat                     – Installations-Skript (als Admin ausführen)
-│   ├── uninstall.bat                   – Deinstallations-Skript
-│   └── configure.reg                   – Registry-Konfiguration importieren
+├── installer/
+│   └── content/
+│       └── configure.reg               – Registry configuration (imported on install)
 │
 ├── WireGuardCredentialProvider.sln
 ├── WireGuardCredentialProvider.vcxproj
@@ -86,215 +85,163 @@ WireGuardCredentialProvider/
 
 ---
 
-## ⚡ Schnellstart
+## ⚡ Quick Start
 
-### 1. Repository klonen
+### 1. Clone the repository
 
 ```cmd
 git clone https://github.com/jenskaesler/wireguard-credential-provider.git
 cd wireguard-credential-provider
 ```
 
-### 2. Bauen
+### 2. Build
 
-Visual Studio öffnen → `WireGuardCredentialProvider.sln` → **Release | x64** → **Strg+Shift+B**
+Open Visual Studio → `WireGuardCredentialProvider.sln` → **Release | x64** → **Ctrl+Shift+B**
 
-Beide Projekte werden gebaut:
+Both projects are built:
 - `x64\Release\WireGuardCredentialProvider.dll`
 - `shutdown-service\x64\Release\WireGuardShutdownService.exe`
 
-### 3. Ausgaben vorbereiten
+### 3. Prepare outputs
 
 ```cmd
-copy x64\Release\WireGuardCredentialProvider.dll deploy\
-copy shutdown-service\x64\Release\WireGuardShutdownService.exe deploy\
+copy x64\Release\WireGuardCredentialProvider.dll installer\content\
+copy shutdown-service\x64\Release\WireGuardShutdownService.exe installer\content\
 ```
 
-### 4. Installieren
+### 4. Install
 
 ```cmd
-:: Als Administrator:
-deploy\install.bat
+:: Run as Administrator:
+installer\install.bat
 ```
 
-Das Skript übernimmt:
-- Kopiert die DLL nach `%SystemRoot%\System32\`
-- Registriert den Credential Provider via `regsvr32`
-- Importiert die Standardkonfiguration aus `configure.reg`
-- Installiert und startet den `WireGuardShutdownHelper`-Dienst
+The script will:
+- Copy the DLL to `%SystemRoot%\System32\`
+- Register the Credential Provider via `regsvr32`
+- Import the default configuration from `configure.reg`
+- Install and start the `WireGuardShutdownHelper` service
 
-### 5. Testen
+### 5. Test
 
-Bildschirm sperren (`Win+L`) → WireGuard-Kachel erscheint neben den Benutzer-Kacheln.
+Lock the screen (`Win+L`) → the WireGuard tile appears alongside the user tiles.
 
 ---
 
-## ⚙️ Konfiguration
+## ⚙️ Configuration
 
-Alle Einstellungen unter `HKEY_LOCAL_MACHINE\SOFTWARE\WireGuardCredentialProvider`:
+All settings are stored under `HKEY_LOCAL_MACHINE\SOFTWARE\Jens Kaesler\WireGuard Credential Provider`:
 
-| Wert | Typ | Beschreibung | Standard |
+| Value | Type | Description | Default |
 |---|---|---|---|
-| `ExePath` | REG_SZ | Pfad zur `wireguard.exe` | `C:\Program Files\WireGuard\wireguard.exe` |
-| `WgExePath` | REG_SZ | Pfad zur `wg.exe` (Traffic-Stats) | `C:\Program Files\WireGuard\wg.exe` |
-| `TileLabel` | REG_SZ | Überschrift auf der Kachel | `WireGuard VPN` |
-| `IconConnected` | REG_SZ | Eigenes Icon (verbunden, 128×128 BMP) | *(eingebettete Ressource)* |
-| `IconDisconnected` | REG_SZ | Eigenes Icon (getrennt, 128×128 BMP) | *(eingebettete Ressource)* |
-| `LogPath` | REG_SZ | Pfad zur Logdatei | `C:\wgcp_debug.log` |
-| `LogLevel` | REG_DWORD | Log-Ebene | `0` (aus) |
+| `ExePath` | REG_SZ | Path to `wireguard.exe` | `C:\Program Files\WireGuard\wireguard.exe` |
+| `WgExePath` | REG_SZ | Path to `wg.exe` (traffic stats) | `C:\Program Files\WireGuard\wg.exe` |
+| `TileLabel` | REG_SZ | Heading on the tile | `WireGuard VPN` |
+| `IconConnected` | REG_SZ | Custom icon (connected, 128×128 BMP) | *(embedded resource)* |
+| `IconDisconnected` | REG_SZ | Custom icon (disconnected, 128×128 BMP) | *(embedded resource)* |
+| `LogPath` | REG_SZ | Path to the log file | `C:\wgcp_debug.log` |
+| `LogLevel` | REG_DWORD | Log level | `1` (CRIT) |
+| `LogRetentionDays` | REG_DWORD | Log retention in days | `7` |
+| `InstallDir` | REG_SZ | Installation directory (set by installer) | *(set automatically)* |
 
-**Log-Ebenen:**
-- `0` – Logging deaktiviert (Produktion)
-- `1` – Nur kritische Fehler
-- `2` – Warnungen und Fehler
-- `3` – Alles (Diagnose)
+**Log levels:**
+- `0` – Logging disabled (production)
+- `1` – Critical errors only
+- `2` – Warnings and errors
+- `3` – Everything (diagnostic)
 
-### Konfiguration per GPO verteilen
+### Distribute configuration via GPO
 
-Die Registry-Werte lassen sich per **Group Policy Preferences (GPP)** auf alle Domain-Clients ausrollen. Die DLL und den Shutdown-Service verteilt ein Logon-Script oder Software-Deployment.
+The Registry values can be pushed to all domain clients using **Group Policy Preferences (GPP)**. The DLL and the shutdown service are distributed via a logon script or software deployment tool.
 
-### Eigene Icons verwenden
+### Custom icons
 
-Icons müssen **128×128 Pixel, 24bpp, unkomprimiertes BMP** sein. Sind `IconConnected` und `IconDisconnected` in der Registry gesetzt, werden diese statt der eingebetteten Ressourcen verwendet.
+Icons must be **128×128 pixels, 24bpp, uncompressed BMP**. If `IconConnected` and `IconDisconnected` are set in the Registry, these will be used instead of the embedded resources.
 
 ---
 
-## 🛑 Shutdown-Verhalten
+## 🛑 Shutdown Behavior
 
-Der **WireGuard Shutdown Helper** (`WireGuardShutdownService.exe`) läuft als Windows-Dienst (Starttyp: Automatisch). Er registriert sich für `SERVICE_CONTROL_PRESHUTDOWN` – Windows benachrichtigt ihn vor dem eigentlichen Shutdown, damit alle aktiven Tunnel sauber getrennt werden können (Timeout: 30 Sekunden).
+The **WireGuard Shutdown Helper** (`WireGuardShutdownService.exe`) runs as a Windows service (startup type: Automatic). It registers for `SERVICE_CONTROL_PRESHUTDOWN` – Windows notifies it before the actual shutdown so all active tunnels can be cleanly disconnected (timeout: 30 seconds).
 
 ```cmd
-:: Status prüfen
+:: Check status
 sc query WireGuardShutdownHelper
 
-:: Manueller Test – trennt alle aktiven Tunnel sofort
+:: Manual test – disconnects all active tunnels immediately
 WireGuardShutdownService.exe /run
 
-:: Deinstallieren
+:: Uninstall
 WireGuardShutdownService.exe /uninstall
 ```
 
 ---
 
-## 🔧 Technische Details
+## 🔧 Technical Details
 
-### Architektur
+### Architecture
 
-Der Credential Provider ist eine **COM In-Process-DLL** die von `LogonUI.exe` auf dem `Winsta0\Winlogon`-Desktop geladen wird. Er implementiert:
+The Credential Provider is a **COM in-process DLL** loaded by `LogonUI.exe` on the `Winsta0\Winlogon` desktop. It implements:
 
-- `ICredentialProvider` – Registrierung und Enumeration der Kacheln
-- `ICredentialProviderCredential` – Darstellung und Interaktion der Kachel
+- `ICredentialProvider` – Registration and enumeration of tiles
+- `ICredentialProviderCredential` – Tile rendering and interaction
 
-Die Kachel gibt keine Credential-Serialisierung zurück (`CPGSR_NO_CREDENTIAL_NOT_FINISHED`) – sie dient ausschließlich zur VPN-Steuerung und lässt den normalen Windows-Login unberührt.
+The tile does not return any credential serialization (`CPGSR_NO_CREDENTIAL_NOT_FINISHED`) – it is solely used for VPN control and leaves the normal Windows login flow untouched.
 
-### WireGuard-Integration
+### WireGuard Integration
 
-| Aktion | Befehl |
+| Action | Command |
 |---|---|
-| Tunnel verbinden | `wireguard.exe /installtunnelservice "C:\...\Profil.conf.dpapi"` |
-| Tunnel trennen | `wireguard.exe /uninstalltunnelservice Profilname` |
-| Verbindungsstatus | Service `WireGuardTunnel$Profilname` abfragen |
-| Traffic-Stats | `wg.exe show Profilname transfer` |
+| Connect tunnel | `wireguard.exe /installtunnelservice "C:\...\Profile.conf.dpapi"` |
+| Disconnect tunnel | `wireguard.exe /uninstalltunnelservice ProfileName` |
+| Connection status | Query service `WireGuardTunnel$ProfileName` |
+| Traffic stats | `wg.exe show ProfileName transfer` |
 
-### Konfigurationsverzeichnis
+### Configuration Directory
 
-WireGuard speichert verschlüsselte Konfigurationen unter:
+WireGuard stores encrypted configurations under:
 ```
 C:\Program Files\WireGuard\Data\Configurations\*.conf.dpapi
 ```
-Der Credential Provider liest die Dateinamen (ohne `.conf.dpapi`) für das Profil-Dropdown. Der Inhalt der verschlüsselten Dateien wird nicht gelesen – `wireguard.exe` übernimmt die Entschlüsselung intern.
+The Credential Provider reads the file names (without `.conf.dpapi`) to populate the profile dropdown. The content of the encrypted files is never read – `wireguard.exe` handles decryption internally.
 
-### Sicherheitshinweis
+### Security Note
 
-Credential Provider und Shutdown-Service laufen als **SYSTEM**. Der Registry-Schlüssel `HKLM\SOFTWARE\WireGuardCredentialProvider` ist standardmäßig nur für Administratoren beschreibbar – stelle sicher dass dies in deiner Umgebung so bleibt.
-
----
-
-## 🔑 Smartcard / YubiKey PIV (Zweiter Faktor)
-
-Der Credential Provider unterstützt optional eine **Smartcard- oder YubiKey-Authentifizierung** als zweiten Faktor vor dem VPN-Verbindungsaufbau. Der YubiKey wird dabei im **PIV-Modus** (Personal Identity Verification) betrieben – Windows sieht ihn wie eine klassische Smartcard.
-
-### Voraussetzungen
-
-- YubiKey mit PIV-Zertifikat (Einrichtung via [YubiKey Manager](https://www.yubico.com/support/download/yubikey-manager/))
-- Windows Smartcard-Treiber (bereits enthalten in Windows 10/11)
-
-### Konfiguration
-
-Alle Smartcard-Einstellungen unter `HKEY_LOCAL_MACHINE\SOFTWARE\WireGuardCredentialProvider`:
-
-| Wert | Typ | Beschreibung | Standard |
-|---|---|---|---|
-| `SmartcardEnabled` | DWORD | Smartcard-Authentifizierung aktivieren | `0` (aus) |
-| `SmartcardPinRequired` | DWORD | PIN-Eingabe erforderlich | `1` (ja) |
-| `SmartcardPinMinLength` | DWORD | Minimale PIN-Länge | `4` |
-| `SmartcardPinMaxAttempts` | DWORD | Max. Fehlversuche bis Warnung | `3` |
-| `SmartcardTimeout` | DWORD | Sekunden warten auf Karte | `10` |
-| `SmartcardConnectOnInsert` | DWORD | Tunnel automatisch verbinden wenn YubiKey eingesteckt | `0` (nein) |
-| `SmartcardDisconnectOnRemove` | DWORD | Tunnel automatisch trennen wenn YubiKey entfernt | `0` (nein) |
-| `SmartcardReaderName` | REG_SZ | Bestimmten Reader erzwingen (leer = erster verfügbarer) | `""` |
-| `SmartcardCertThumbprint` | REG_SZ | SHA1-Thumbprint des erwarteten Zertifikats (leer = beliebig) | `""` |
-
-### Aktivierung
-
-```reg
-[HKEY_LOCAL_MACHINE\SOFTWARE\WireGuardCredentialProvider]
-"SmartcardEnabled"=dword:00000001
-"SmartcardPinRequired"=dword:00000001
-"SmartcardConnectOnInsert"=dword:00000001
-"SmartcardDisconnectOnRemove"=dword:00000001
-```
-
-### Ablauf mit aktivierter Smartcard
-
-1. Loginscreen erscheint – Kachel zeigt `🔑 Bitte YubiKey / Smartcard einstecken...`
-2. YubiKey einstecken → `✅ Smartcard erkannt`
-3. PIN eingeben (wenn `SmartcardPinRequired=1`)
-4. **Verbinden** drücken → PIV VERIFY APDU wird gesendet
-5. Bei Erfolg: Tunnel verbindet sich
-6. YubiKey entfernen → Tunnel trennt automatisch (wenn `SmartcardDisconnectOnRemove=1`)
-
-### Thumbprint ermitteln
-
-```powershell
-# PowerShell – Thumbprint des PIV-Zertifikats anzeigen
-Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -like "*YubiKey*" } | Select-Object Thumbprint, Subject
-```
-
+Both the Credential Provider and the Shutdown Service run as **SYSTEM**. The Registry key `HKLM\SOFTWARE\Jens Kaesler\WireGuard Credential Provider` is by default writable only by administrators – make sure this remains the case in your environment.
 
 ---
 
-## 🐛 Fehlersuche
+## 🐛 Troubleshooting
 
-`LogLevel` auf `3` setzen:
+Set `LogLevel` to `3`:
 
 ```reg
-[HKEY_LOCAL_MACHINE\SOFTWARE\WireGuardCredentialProvider]
+[HKEY_LOCAL_MACHINE\SOFTWARE\Jens Kaesler\WireGuard Credential Provider]
 "LogLevel"=dword:00000003
 "LogPath"="C:\\wgcp_debug.log"
 ```
 
-Das Log zeigt alle Schritte: Profile gefunden, Verbindungsstatus, Icon-Laden, Verbinden/Trennen-Aktionen. Nach der Diagnose `LogLevel` wieder auf `0` setzen.
+The log shows all steps: profiles found, connection status, icon loading, connect/disconnect actions. Reset `LogLevel` to `1` after diagnostics.
 
 ---
 
-## 🤝 Mitmachen
+## 🤝 Contributing
 
-Issues und Pull Requests sind willkommen. Besonders interessant:
+Issues and pull requests are welcome. Areas of particular interest:
 
-- 🌐 Englische Lokalisierung
-- 📦 MSI-Installer
-- 🔒 Optionale PIN-Abfrage vor dem Verbinden
-- 🔔 Benachrichtigung nach erfolgreicher Verbindung
-
----
-
-## 📜 Lizenz
-
-[MIT](LICENSE) – mach damit, was du willst, aber ohne Garantie.
+- 📦 MSI installer
+- 🌐 Localization support
+- 🔒 Optional PIN prompt before connecting
+- 🔔 Notification after successful connection
 
 ---
 
-## 🙏 Entstehungsgeschichte
+## 📜 License
 
-Entstanden aus dem praktischen Bedarf, Domain-joined Laptops auch im Homeoffice und unterwegs sauber per WireGuard in das Firmennetz einzubinden – ohne auf teure Enterprise-VPN-Lösungen angewiesen zu sein. Die gesamte Entwicklungsgeschichte ist im [CHANGELOG](CHANGELOG.md) dokumentiert.
+[MIT](LICENSE) – do whatever you want with it, but without any warranty.
+
+---
+
+## 🙏 Background
+
+Born out of a practical need to reliably connect domain-joined laptops to the corporate network via WireGuard from home and on the road – without relying on expensive enterprise VPN solutions. The full development history is documented in the [CHANGELOG](CHANGELOG.md).

@@ -35,9 +35,9 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// Registry-Schlüssel und Werte
+// Registry key and values
 // ---------------------------------------------------------------------------
-#define WGCP_REG_KEY          L"SOFTWARE\\WireGuardCredentialProvider"
+#define WGCP_REG_KEY          L"SOFTWARE\\Jens Kaesler\\WireGuard Credential Provider"
 #define WGCP_REG_EXEPATH      L"ExePath"
 #define WGCP_REG_WGEXEPATH    L"WgExePath"
 #define WGCP_REG_LABEL        L"TileLabel"
@@ -67,12 +67,12 @@
 #define WGCP_DEFAULT_LOGLEVEL     1
 #define WGCP_DEFAULT_LOGRETENTION 7
 
-// Smartcard Defaults
-#define WGCP_DEFAULT_SC_ENABLED            0   // deaktiviert
-#define WGCP_DEFAULT_SC_PIN_REQUIRED       1   // PIN erforderlich
+// Smartcard defaults
+#define WGCP_DEFAULT_SC_ENABLED            0   // disabled
+#define WGCP_DEFAULT_SC_PIN_REQUIRED       1   // PIN required
 #define WGCP_DEFAULT_SC_PIN_MIN_LENGTH     4
 #define WGCP_DEFAULT_SC_PIN_MAX_ATTEMPTS   3
-#define WGCP_DEFAULT_SC_TIMEOUT            10  // Sekunden
+#define WGCP_DEFAULT_SC_TIMEOUT            10  // seconds
 #define WGCP_DEFAULT_SC_CONNECT_ON_INSERT  0
 #define WGCP_DEFAULT_SC_DISCONNECT_ON_REMOVE 0
 
@@ -85,7 +85,7 @@
 #define MAX_PROFILES      64
 
 // ---------------------------------------------------------------------------
-// Log-Level
+// Log levels
 // ---------------------------------------------------------------------------
 #define WGCP_LOG_OFF   0
 #define WGCP_LOG_CRIT  1
@@ -125,14 +125,14 @@ inline DWORD ReadRegDword(HKEY hKey, PCWSTR pwszValue, DWORD dwDefault)
 }
 
 // ---------------------------------------------------------------------------
-// Log-Pfad auflösen
-// Platzhalter: %INSTALLDIR% -> Installationsverzeichnis aus Registry
-//              Dateiname kann ddMMyyyy enthalten -> wird ersetzt
-// Beispiel: %INSTALLDIR%\logs\wgcp_ddMMyyyy.log
+// Resolve log path
+// Placeholder: %INSTALLDIR% -> installation directory from registry
+//              Filename may contain ddMMyyyy -> will be substituted
+// Example: %INSTALLDIR%\logs\wgcp_ddMMyyyy.log
 // ---------------------------------------------------------------------------
 inline void WGCPResolvLogPath(WCHAR* pwszOut, DWORD cchOut)
 {
-    // Installationsverzeichnis aus Registry lesen
+    // Read installation directory from registry
     WCHAR wszInstDir[MAX_PATH_WGCP] = {};
     HKEY hKey = nullptr;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, WGCP_REG_KEY, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
@@ -142,7 +142,7 @@ inline void WGCPResolvLogPath(WCHAR* pwszOut, DWORD cchOut)
         RegCloseKey(hKey);
     }
 
-    // Kein Pfad in Registry -> Standard-Fallback mit Datum im Appdata-Verzeichnis
+    // No path in registry -> default fallback with date in ProgramData
     if (pwszOut[0] == L'\0')
     {
         SYSTEMTIME st = {}; GetLocalTime(&st);
@@ -156,18 +156,18 @@ inline void WGCPResolvLogPath(WCHAR* pwszOut, DWORD cchOut)
         else
         {
             StringCchPrintfW(pwszOut, cchOut,
-                             L"C:\\ProgramData\\WireGuardCredentialProvider\\logs\\wgcp_%02d%02d%04d.log",
+                             L"C:\\ProgramData\\Jens Kaesler\\WireGuard Credential Provider\\logs\\wgcp_%02d%02d%04d.log",
                              st.wDay, st.wMonth, st.wYear);
         }
         return;
     }
 
-    // Datums-Platzhalter ersetzen (ddMMyyyy im Dateinamen)
+    // Replace date placeholder (ddMMyyyy in filename)
     SYSTEMTIME st = {}; GetLocalTime(&st);
     WCHAR wszDate[16] = {};
     StringCchPrintfW(wszDate, ARRAYSIZE(wszDate), L"%02d%02d%04d", st.wDay, st.wMonth, st.wYear);
 
-    // Einfaches String-Replace für "ddMMyyyy"
+    // Simple string replace for "ddMMyyyy"
     WCHAR wszResult[MAX_PATH_WGCP] = {};
     PCWSTR pSrc = pwszOut;
     WCHAR* pDst = wszResult;
@@ -193,32 +193,32 @@ inline void WGCPResolvLogPath(WCHAR* pwszOut, DWORD cchOut)
 }
 
 // ---------------------------------------------------------------------------
-// Log-Rotation: Löscht Log-Dateien die älter als dwDays Tage sind
-// Sucht im gleichen Verzeichnis wie der aktuelle LogPath nach wgcp_*.log
+// Log rotation: deletes log files older than dwDays days
+// Searches the same directory as the current LogPath for wgcp_*.log
 // ---------------------------------------------------------------------------
 inline void WGCPRotateLogs(PCWSTR pwszLogPath, DWORD dwDays)
 {
     if (!pwszLogPath || pwszLogPath[0] == L'\0' || dwDays == 0) return;
 
-    // Verzeichnis aus Pfad extrahieren
+    // Extract directory from path
     WCHAR wszDir[MAX_PATH_WGCP] = {};
     StringCchCopyW(wszDir, MAX_PATH_WGCP, pwszLogPath);
     WCHAR* pLastSlash = wcsrchr(wszDir, L'\\');
     if (!pLastSlash) return;
     *pLastSlash = L'\0';
 
-    // Suchmuster
+    // Search pattern
     WCHAR wszSearch[MAX_PATH_WGCP] = {};
     StringCchPrintfW(wszSearch, MAX_PATH_WGCP, L"%s\\wgcp_*.log", wszDir);
 
-    // Schwellwert: aktuelles Datum minus dwDays Tage als FILETIME
+    // Threshold: current date minus dwDays as FILETIME
     SYSTEMTIME stNow = {}; GetSystemTime(&stNow);
     FILETIME ftNow = {};   SystemTimeToFileTime(&stNow, &ftNow);
     ULARGE_INTEGER uNow;
     uNow.LowPart  = ftNow.dwLowDateTime;
     uNow.HighPart = ftNow.dwHighDateTime;
 
-    // dwDays in 100-Nanosekunden-Intervalle umrechnen
+    // Convert dwDays to 100-nanosecond intervals
     ULONGLONG ullThreshold = static_cast<ULONGLONG>(dwDays) * 24ULL * 3600ULL * 10000000ULL;
 
     WIN32_FIND_DATAW fd = {};
@@ -226,7 +226,7 @@ inline void WGCPRotateLogs(PCWSTR pwszLogPath, DWORD dwDays)
     if (hFind == INVALID_HANDLE_VALUE) return;
 
     do {
-        // Datei-Schreibzeit prüfen
+        // Check file write time
         ULARGE_INTEGER uFile;
         uFile.LowPart  = fd.ftLastWriteTime.dwLowDateTime;
         uFile.HighPart = fd.ftLastWriteTime.dwHighDateTime;
@@ -244,12 +244,12 @@ inline void WGCPRotateLogs(PCWSTR pwszLogPath, DWORD dwDays)
 
 // ---------------------------------------------------------------------------
 // Logger
-// Liest Konfiguration aus Registry, löst Datums-Platzhalter auf,
-// erstellt Log-Verzeichnis bei Bedarf, schreibt UTF-16 LE mit BOM.
+// Reads config from registry, resolves date placeholders,
+// creates log directory if needed, writes UTF-16 LE with BOM.
 // ---------------------------------------------------------------------------
 inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
 {
-    // Konfiguration lesen
+    // Read configuration
     DWORD dwCfgLevel    = WGCP_DEFAULT_LOGLEVEL;
     DWORD dwRetention   = WGCP_DEFAULT_LOGRETENTION;
     HKEY  hKey          = nullptr;
@@ -262,22 +262,22 @@ inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
 
     if (dwCfgLevel == WGCP_LOG_OFF || dwLevel > dwCfgLevel) return;
 
-    // Log-Pfad auflösen (mit Datums-Platzhalter)
+    // Resolve log path (with date placeholder)
     WCHAR wszPath[MAX_PATH_WGCP] = {};
     WGCPResolvLogPath(wszPath, MAX_PATH_WGCP);
 
-    // Log-Verzeichnis anlegen
+    // Create log directory
     WCHAR wszDir[MAX_PATH_WGCP] = {};
     StringCchCopyW(wszDir, MAX_PATH_WGCP, wszPath);
     WCHAR* pSlash = wcsrchr(wszDir, L'\\');
     if (pSlash) { *pSlash = L'\0'; SHCreateDirectoryExW(nullptr, wszDir, nullptr); }
 
-    // Datei öffnen/anlegen
+    // Open or create log file
     HANDLE hFile = CreateFileW(wszPath, FILE_APPEND_DATA, FILE_SHARE_READ,
                                nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (hFile == INVALID_HANDLE_VALUE) return;
 
-    // BOM beim ersten Schreiben
+    // Write BOM on first write
     LARGE_INTEGER liSize = {}; GetFileSizeEx(hFile, &liSize);
     if (liSize.QuadPart == 0)
     {
@@ -285,7 +285,7 @@ inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
         WriteFile(hFile, &wBOM, sizeof(wBOM), &dw, nullptr);
     }
 
-    // Zeile formatieren
+    // Format log line
     PCWSTR pwszLvl = (dwLevel==WGCP_LOG_CRIT)?L"[CRIT] "
                    : (dwLevel==WGCP_LOG_WARN)?L"[WARN] ":L"[DEBUG]";
     SYSTEMTIME st = {}; GetLocalTime(&st);
@@ -300,7 +300,7 @@ inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
               static_cast<DWORD>(wcslen(wszLine) * sizeof(WCHAR)), &dw, nullptr);
     CloseHandle(hFile);
 
-    // Log-Rotation (nur bei CRIT um Performance nicht zu belasten)
+    // Log rotation (only on CRIT/WARN to avoid performance impact)
     if (dwLevel == WGCP_LOG_CRIT || dwLevel == WGCP_LOG_WARN)
         WGCPRotateLogs(wszPath, dwRetention);
 }
@@ -310,7 +310,7 @@ inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
 #define LOG_DEBUG(msg) WGCPLog(WGCP_LOG_DEBUG, (msg))
 
 // ---------------------------------------------------------------------------
-// String-Duplikation für COM (Aufrufer gibt mit CoTaskMemFree frei)
+// String duplication for COM (caller frees with CoTaskMemFree)
 // ---------------------------------------------------------------------------
 inline HRESULT WGCPStrDup(PCWSTR psz, WCHAR** ppwsz)
 {
@@ -331,7 +331,7 @@ inline HRESULT WGCPStrDup(PCWSTR psz, WCHAR** ppwsz)
 }
 
 // ---------------------------------------------------------------------------
-// WireGuard-Profil-Enumeration
+// WireGuard profile enumeration
 // ---------------------------------------------------------------------------
 inline int WGEnumProfiles(WCHAR profiles[][MAX_PATH_WGCP], int maxProfiles)
 {
@@ -357,7 +357,7 @@ inline int WGEnumProfiles(WCHAR profiles[][MAX_PATH_WGCP], int maxProfiles)
 }
 
 // ---------------------------------------------------------------------------
-// Verbindungsstatus prüfen
+// Check connection status
 // ---------------------------------------------------------------------------
 inline bool WGIsTunnelConnected(PCWSTR pwszProfile)
 {
@@ -376,7 +376,7 @@ inline bool WGIsTunnelConnected(PCWSTR pwszProfile)
 }
 
 // ---------------------------------------------------------------------------
-// Tunnel verbinden: wireguard.exe /installtunnelservice "<pfad>"
+// Connect tunnel: wireguard.exe /installtunnelservice "<path>"
 // ---------------------------------------------------------------------------
 inline bool WGConnect(PCWSTR pwszExePath, PCWSTR pwszProfile)
 {
@@ -403,7 +403,7 @@ inline bool WGConnect(PCWSTR pwszExePath, PCWSTR pwszProfile)
 }
 
 // ---------------------------------------------------------------------------
-// Tunnel trennen: wireguard.exe /uninstalltunnelservice <name>
+// Disconnect tunnel: wireguard.exe /uninstalltunnelservice <name>
 // ---------------------------------------------------------------------------
 inline bool WGDisconnect(PCWSTR pwszExePath, PCWSTR pwszProfile)
 {
@@ -487,7 +487,7 @@ inline void WGGetTrafficStats(PCWSTR pwszWgExe, PCWSTR pwszProfile,
 }
 
 // ---------------------------------------------------------------------------
-// Verbindungstimer: "⏱ Verbunden seit HH:MM:SS"
+// Connection timer: "⏱ Connected since HH:MM:SS"
 // ---------------------------------------------------------------------------
 inline void WGGetConnectedSince(PCWSTR pwszProfile, WCHAR* pwszOut, DWORD cchOut)
 {
@@ -517,13 +517,13 @@ inline void WGGetConnectedSince(PCWSTR pwszProfile, WCHAR* pwszOut, DWORD cchOut
         uNow.LowPart   = ftNow.dwLowDateTime;    uNow.HighPart   = ftNow.dwHighDateTime;
         ULONGLONG uDiff = (uNow.QuadPart - uStart.QuadPart) / 10000000ULL;
         DWORD h = (DWORD)(uDiff/3600), m = (DWORD)((uDiff%3600)/60), s = (DWORD)(uDiff%60);
-        StringCchPrintfW(pwszOut, cchOut, L"\u23F1 Verbunden seit %02d:%02d:%02d", h, m, s);
+        StringCchPrintfW(pwszOut, cchOut, L"\u23F1 Connected since %02d:%02d:%02d", h, m, s);
     }
     CloseHandle(hProc);
 }
 
 // ---------------------------------------------------------------------------
-// Smartcard-Konfiguration
+// Smartcard configuration
 // ---------------------------------------------------------------------------
 struct WGCPSmartcardConfig
 {
@@ -565,7 +565,7 @@ inline void WGCPLoadSmartcardConfig(WGCPSmartcardConfig& cfg)
 
     RegCloseKey(hKey);
 
-    // Konfiguration loggen
+    // Log configuration
     WCHAR wszLog[512] = {};
     StringCchPrintfW(wszLog, ARRAYSIZE(wszLog),
         L"SC-Config: enabled=%d pinReq=%d pinMin=%lu maxAttempts=%lu timeout=%lu "
@@ -577,19 +577,19 @@ inline void WGCPLoadSmartcardConfig(WGCPSmartcardConfig& cfg)
 }
 
 // ---------------------------------------------------------------------------
-// Smartcard / WinSCard Hilfsfunktionen
+// Smartcard / WinSCard helper functions
 // ---------------------------------------------------------------------------
 #include <winscard.h>
 #include <wincrypt.h>
 #pragma comment(lib, "winscard.lib")
 #pragma comment(lib, "crypt32.lib")
 
-// Ergebnis einer Smartcard-Authentifizierung
+// Result of a smartcard authentication attempt
 enum class WGCPScResult
 {
     Success,
     NoCard,
-    WrongCard,       // Thumbprint passt nicht
+    WrongCard,       // Thumbprint does not match
     PinWrong,
     PinLocked,
     Timeout,
@@ -597,7 +597,7 @@ enum class WGCPScResult
     Error
 };
 
-// Prüft ob eine Karte im Reader steckt und gibt den Reader-Namen zurück
+// Checks whether a card is present and returns the reader name
 inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
                                WCHAR* pwszReaderOut, DWORD cchReader)
 {
@@ -610,11 +610,11 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
         return false;
     }
 
-    // Konfigurierter Reader oder alle Reader durchsuchen
+    // Use configured reader or search all readers
     if (cfg.wszReaderName[0] != L'\0')
     {
         WCHAR d[320] = {};
-        StringCchPrintfW(d, 320, L"SC: Pruefe konfigurierten Reader '%s'", cfg.wszReaderName);
+        StringCchPrintfW(d, 320, L"SC: Checking configured reader '%s'", cfg.wszReaderName);
         LOG_DEBUG(d);
         SCARD_READERSTATEW rs = {};
         rs.szReader     = cfg.wszReaderName;
@@ -625,16 +625,16 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
             (rs.dwEventState & SCARD_STATE_PRESENT))
         {
             WCHAR d2[320] = {};
-            StringCchPrintfW(d2, 320, L"SC: Karte gefunden in Reader '%s'", cfg.wszReaderName);
+            StringCchPrintfW(d2, 320, L"SC: Card found in reader '%s'", cfg.wszReaderName);
             LOG_DEBUG(d2);
             StringCchCopyW(pwszReaderOut, cchReader, cfg.wszReaderName);
             return true;
         }
-        LOG_DEBUG(L"SC: Kein Karte im konfigurierten Reader");
+        LOG_DEBUG(L"SC: No card in configured reader");
         return false;
     }
 
-    // Alle Reader aufzählen
+    // Enumerate all readers
     DWORD dwLen = SCARD_AUTOALLOCATE;
     LPWSTR pwszReaders = nullptr;
     LONG lRet = SCardListReadersW(hCtx, nullptr,
@@ -652,7 +652,7 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
     for (LPCWSTR p = pwszReaders; *p; p += wcslen(p) + 1)
     {
         WCHAR d[320] = {};
-        StringCchPrintfW(d, 320, L"SC: Pruefe Reader '%s'", p);
+        StringCchPrintfW(d, 320, L"SC: Checking reader '%s'", p);
         LOG_DEBUG(d);
         SCARD_READERSTATEW rs = {};
         rs.szReader      = p;
@@ -661,7 +661,7 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
             (rs.dwEventState & SCARD_STATE_PRESENT))
         {
             WCHAR d2[320] = {};
-            StringCchPrintfW(d2, 320, L"SC: Karte gefunden in Reader '%s'", p);
+            StringCchPrintfW(d2, 320, L"SC: Card found in reader '%s'", p);
             LOG_DEBUG(d2);
             StringCchCopyW(pwszReaderOut, cchReader, p);
             bFound = true;
@@ -669,18 +669,18 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
         }
     }
 
-    if (!bFound) LOG_DEBUG(L"SC: Keine Karte in keinem Reader gefunden");
+    if (!bFound) LOG_DEBUG(L"SC: No card found in any reader");
     SCardFreeMemory(hCtx, pwszReaders);
     SCardReleaseContext(hCtx);
     return bFound;
 }
 
-// Wartet bis eine Karte eingesteckt wird (Timeout in Sekunden, 0 = sofort)
+// Waits until a card is inserted (timeout in seconds, 0 = immediate)
 inline bool WGCPWaitForCard(const WGCPSmartcardConfig& cfg,
                              WCHAR* pwszReaderOut, DWORD cchReader)
 {
     WCHAR d[64] = {};
-    StringCchPrintfW(d, 64, L"SC: Warte auf Karte (Timeout %lu s)...", cfg.dwTimeout);
+    StringCchPrintfW(d, 64, L"SC: Waiting for card (timeout %lu s)...", cfg.dwTimeout);
     LOG_DEBUG(d);
     DWORD dwDeadline = GetTickCount() + cfg.dwTimeout * 1000;
     do {
@@ -688,17 +688,17 @@ inline bool WGCPWaitForCard(const WGCPSmartcardConfig& cfg,
             return true;
         Sleep(500);
     } while (GetTickCount() < dwDeadline);
-    LOG_WARN(L"SC: Timeout - keine Karte gefunden");
+    LOG_WARN(L"SC: Timeout - no card found");
     return false;
 }
 
-// Prüft ob Karte entfernt wurde
+// Checks whether the card has been removed
 inline bool WGCPIsCardRemoved(PCWSTR pwszReader)
 {
     SCARDCONTEXT hCtx = 0;
     if (SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &hCtx) != SCARD_S_SUCCESS)
     {
-        LOG_WARN(L"SC: SCardEstablishContext (IsCardRemoved) fehlgeschlagen");
+        LOG_WARN(L"SC: SCardEstablishContext (IsCardRemoved) failed");
         return true;
     }
 
@@ -713,26 +713,26 @@ inline bool WGCPIsCardRemoved(PCWSTR pwszReader)
     if (bRemoved)
     {
         WCHAR d[320] = {};
-        StringCchPrintfW(d, 320, L"SC: Karte entfernt aus Reader '%s'", pwszReader);
+        StringCchPrintfW(d, 320, L"SC: Card removed from reader '%s'", pwszReader);
         LOG_DEBUG(d);
     }
     return bRemoved;
 }
 
-// Prüft Zertifikats-Thumbprint auf der Karte (leer = kein Check)
+// Verifies certificate thumbprint on the card (empty = no check)
 inline bool WGCPVerifyCertThumbprint(SCARDHANDLE hCard, PCWSTR pwszExpected)
 {
     if (!pwszExpected || pwszExpected[0] == L'\0')
     {
-        LOG_DEBUG(L"SC: Kein Thumbprint konfiguriert - Zertifikat-Check uebersprungen");
+        LOG_DEBUG(L"SC: No thumbprint configured - certificate check skipped");
         return true;
     }
     WCHAR d[160] = {};
-    StringCchPrintfW(d, 160, L"SC: Pruefe Zertifikat-Thumbprint '%s'", pwszExpected);
+    StringCchPrintfW(d, 160, L"SC: Verifying certificate thumbprint '%s'", pwszExpected);
     LOG_DEBUG(d);
 
-    // ATR lesen und Zertifikat via CryptoAPI prüfen
-    // Karte als Smartcard-Store öffnen
+    // Read ATR and verify certificate via CryptoAPI
+    // Open card as smartcard store
     HCERTSTORE hStore = CertOpenStore(
         CERT_STORE_PROV_SYSTEM_W, 0, 0,
         CERT_SYSTEM_STORE_LOCAL_MACHINE | CERT_STORE_READONLY_FLAG,
@@ -743,14 +743,14 @@ inline bool WGCPVerifyCertThumbprint(SCARDHANDLE hCard, PCWSTR pwszExpected)
     PCCERT_CONTEXT pCert = nullptr;
     while ((pCert = CertEnumCertificatesInStore(hStore, pCert)) != nullptr)
     {
-        // SHA1-Thumbprint berechnen
+        // Compute SHA1 thumbprint
         BYTE  rgThumb[20] = {};
         DWORD cbThumb     = sizeof(rgThumb);
         if (!CertGetCertificateContextProperty(pCert, CERT_SHA1_HASH_PROP_ID,
                                                rgThumb, &cbThumb))
             continue;
 
-        // Als Hex-String
+        // As hex string
         WCHAR wszThumb[48] = {};
         for (DWORD i = 0; i < cbThumb; i++)
             StringCchPrintfW(wszThumb + i*2, 3, L"%02X", rgThumb[i]);
@@ -764,32 +764,32 @@ inline bool WGCPVerifyCertThumbprint(SCARDHANDLE hCard, PCWSTR pwszExpected)
     }
     CertCloseStore(hStore, 0);
     if (bMatch)
-        LOG_DEBUG(L"SC: Thumbprint-Verifikation erfolgreich");
+        LOG_DEBUG(L"SC: Thumbprint verification successful");
     else
-        LOG_WARN(L"SC: Kein passendes Zertifikat gefunden");
+        LOG_WARN(L"SC: No matching certificate found");
     return bMatch;
 }
 
-// Haupt-Authentifizierungsfunktion
-// pwszPin: PIN (kann nullptr sein wenn bPinRequired=false)
+// Main authentication function
+// pwszPin: PIN (may be nullptr if bPinRequired=false)
 inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
                                                PCWSTR pwszPin)
 {
     if (!cfg.bEnabled) return WGCPScResult::Disabled;
 
-    // Reader finden
+    // Find reader
     WCHAR wszReader[256] = {};
     if (!WGCPWaitForCard(cfg, wszReader, 256))
     {
-        LOG_WARN(L"Smartcard: Keine Karte gefunden (Timeout)");
+        LOG_WARN(L"Smartcard: No card found (timeout)");
         return WGCPScResult::Timeout;
     }
 
     WCHAR d[512] = {};
-    StringCchPrintfW(d, 512, L"Smartcard: Karte gefunden in Reader '%s'", wszReader);
+    StringCchPrintfW(d, 512, L"Smartcard: Card found in reader '%s'", wszReader);
     LOG_DEBUG(d);
 
-    // Verbindung zur Karte herstellen
+    // Connect to card
     SCARDCONTEXT hCtx   = 0;
     SCARDHANDLE  hCard  = 0;
     DWORD        dwProto = 0;
@@ -803,23 +803,23 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
     if (lRet != SCARD_S_SUCCESS)
     {
         SCardReleaseContext(hCtx);
-        LOG_WARN(L"Smartcard: SCardConnect fehlgeschlagen");
+        LOG_WARN(L"Smartcard: SCardConnect failed");
         return WGCPScResult::Error;
     }
 
-    // Thumbprint prüfen
+    // Verify thumbprint
     if (!WGCPVerifyCertThumbprint(hCard, cfg.wszCertThumbprint))
     {
         SCardDisconnect(hCard, SCARD_LEAVE_CARD);
         SCardReleaseContext(hCtx);
-        LOG_WARN(L"Smartcard: Zertifikat-Thumbprint stimmt nicht ueberein");
+        LOG_WARN(L"Smartcard: Certificate thumbprint mismatch");
         return WGCPScResult::WrongCard;
     }
 
-    // PIN-Verifizierung via VERIFY APDU (ISO 7816-4)
+    // PIN verification via VERIFY APDU (ISO 7816-4)
     if (cfg.bPinRequired && pwszPin && pwszPin[0] != L'\0')
     {
-        // PIN von Unicode nach ASCII konvertieren
+        // Convert PIN from Unicode to ASCII
         char szPin[32] = {};
         WideCharToMultiByte(CP_ACP, 0, pwszPin, -1, szPin, sizeof(szPin)-1, nullptr, nullptr);
         DWORD dwPinLen = (DWORD)strlen(szPin);
@@ -832,7 +832,7 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
         }
 
         // PIV VERIFY APDU: CLA=00, INS=20, P1=00, P2=80 (PIV Card Application PIN)
-        // Daten: PIN padded mit 0xFF auf 8 Byte
+        // Data: PIN padded with 0xFF to 8 bytes
         BYTE apdu[13] = { 0x00, 0x20, 0x00, 0x80, 0x08,
                           0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
         memcpy(apdu + 5, szPin, min(dwPinLen, 8u));
@@ -846,7 +846,7 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
         lRet = SCardTransmit(hCard, pProto, apdu, sizeof(apdu),
                              nullptr, resp, &dwRecv);
 
-        // PIN im Speicher löschen
+        // Securely erase PIN from memory
         SecureZeroMemory(szPin, sizeof(szPin));
         SecureZeroMemory(apdu + 5, 8);
 
@@ -854,22 +854,22 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
         {
             SCardDisconnect(hCard, SCARD_LEAVE_CARD);
             SCardReleaseContext(hCtx);
-            LOG_WARN(L"Smartcard: SCardTransmit fehlgeschlagen");
+            LOG_WARN(L"Smartcard: SCardTransmit failed");
             return WGCPScResult::Error;
         }
 
-        // SW1=90, SW2=00 -> Erfolg
-        // SW1=63, SW2=CX -> X Versuche verbleibend
-        // SW1=69, SW2=83 -> PIN gesperrt
+        // SW1=90, SW2=00 -> success
+        // SW1=63, SW2=CX -> X attempts remaining
+        // SW1=69, SW2=83 -> PIN locked
         if (resp[0] == 0x90 && resp[1] == 0x00)
         {
-            LOG_DEBUG(L"Smartcard: PIN-Verifikation erfolgreich");
+            LOG_DEBUG(L"Smartcard: PIN verification successful");
         }
         else if (resp[0] == 0x69 && resp[1] == 0x83)
         {
             SCardDisconnect(hCard, SCARD_LEAVE_CARD);
             SCardReleaseContext(hCtx);
-            LOG_WARN(L"Smartcard: PIN gesperrt");
+            LOG_WARN(L"Smartcard: PIN locked");
             return WGCPScResult::PinLocked;
         }
         else
@@ -877,7 +877,7 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
             WCHAR e[64] = {};
             DWORD remaining = resp[1] & 0x0F;
             StringCchPrintfW(e, 64,
-                             L"Smartcard: PIN falsch. Verbleibende Versuche: %lu", remaining);
+                             L"Smartcard: Wrong PIN. Remaining attempts: %lu", remaining);
             LOG_WARN(e);
             SCardDisconnect(hCard, SCARD_LEAVE_CARD);
             SCardReleaseContext(hCtx);
@@ -887,6 +887,6 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
 
     SCardDisconnect(hCard, SCARD_LEAVE_CARD);
     SCardReleaseContext(hCtx);
-    LOG_DEBUG(L"Smartcard: Authentifizierung erfolgreich");
+    LOG_DEBUG(L"Smartcard: Authentication successful");
     return WGCPScResult::Success;
 }
