@@ -50,8 +50,10 @@ WireGuardTrayApp::WireGuardTrayApp()
     , _bConnected(false)
     , _nProfiles(0), _nSelectedProfile(0)
 {
-    _hWatcherThread = nullptr;
-    _hWatcherStop   = nullptr;
+    _hWatcherThread  = nullptr;
+    _hWatcherStop    = nullptr;
+    _hScWatchThread  = nullptr;
+    _hScWatchStop    = nullptr;
     ZeroMemory(&_nid,              sizeof(_nid));
     ZeroMemory(&_scConfig,         sizeof(_scConfig));
     ZeroMemory(_wszExePath,        sizeof(_wszExePath));
@@ -65,6 +67,7 @@ WireGuardTrayApp::WireGuardTrayApp()
 WireGuardTrayApp::~WireGuardTrayApp()
 {
     _StopWireGuardWatcher();
+    _StopSmartcardWatcher();
     _RemoveTrayIcon();
     if (_hIconConnected)    { DestroyIcon(_hIconConnected);    _hIconConnected    = nullptr; }
     if (_hIconDisconnected) { DestroyIcon(_hIconDisconnected); _hIconDisconnected = nullptr; }
@@ -128,6 +131,9 @@ bool WireGuardTrayApp::Init(HINSTANCE hInst)
     SetTimer(_hWnd, TIMER_REFRESH_ID, TIMER_REFRESH_MS, nullptr);
 
     _StartWireGuardWatcher();
+    if (_scConfig.bEnabled &&
+        (_scConfig.bConnectOnInsert || _scConfig.bDisconnectOnRemove))
+        _StartSmartcardWatcher();
     LOG_DEBUG(L"Tray: Init complete");
     return true;
 }
@@ -551,8 +557,8 @@ bool WireGuardTrayApp::_ShowPinDialog()
     if (!pTmpl) return false;
 
     DLGTEMPLATE* pT = const_cast<DLGTEMPLATE*>(pTmpl);
-    pT->style = DS_MODALFRAME | DS_CENTER | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU;
-    pT->cx = 240; pT->cy = 110;
+    pT->style = DS_MODALFRAME | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU;
+    pT->cx = 260; pT->cy = 100;
 
     INT_PTR nRet = DialogBoxIndirectParamW(
         _hInst, pTmpl, _hWnd, _PinDlgProc, reinterpret_cast<LPARAM>(&data));
@@ -575,35 +581,133 @@ INT_PTR CALLBACK WireGuardTrayApp::_PinDlgProc(HWND hDlg, UINT msg,
     case WM_INITDIALOG:
     {
         s_pData = reinterpret_cast<PinDlgData*>(lParam);
+
+        // Window title
         SetWindowTextW(hDlg,
-            T(L"WireGuard VPN \u2013 Smartcard-Authentifizierung",
-              L"WireGuard VPN \u2013 Smartcard Authentication"));
+            T(L"WireGuard VPN \u2013 YubiKey / Smartcard",
+              L"WireGuard VPN \u2013 YubiKey / Smartcard"));
 
-        CreateWindowExW(0, L"STATIC",
-            T(L"\U0001F511 Bitte YubiKey / Smartcard einstecken...",
-              L"\U0001F511 Please insert your YubiKey / smartcard..."),
-            WS_CHILD | WS_VISIBLE | SS_LEFT,
-            10, 10, 310, 30, hDlg, reinterpret_cast<HMENU>(IDC_SC_STATUS), nullptr, nullptr);
+        // Set exact pixel size, then center on screen
+        // Dialog template units are unreliable for pixel-precise layout
+        const int DLG_W = 370;
+        const int DLG_H = 182;  // header(46) + sep + pin(27) + status(14) + sep + buttons(30) + titlebar+border+padding
+        int scx = GetSystemMetrics(SM_CXSCREEN);
+        int scy = GetSystemMetrics(SM_CYSCREEN);
+        SetWindowPos(hDlg, nullptr,
+                     (scx - DLG_W) / 2, (scy - DLG_H) / 2,
+                     DLG_W, DLG_H,
+                     SWP_NOZORDER);
 
-        CreateWindowExW(0, L"STATIC", T(L"PIN:", L"PIN:"),
+        // Shared fonts
+        HFONT hFontBold = CreateFontW(15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HFONT hFontUI = CreateFontW(13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
+        // --- Header (y 0-46) ---
+        HWND hHdr = CreateWindowExW(0, L"STATIC", L"",
+            WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
+            0, 0, 340, 46, hDlg, reinterpret_cast<HMENU>(101), nullptr, nullptr);
+        (void)hHdr;
+
+        HWND hIcon = CreateWindowExW(0, L"STATIC", L"",
+            WS_CHILD | WS_VISIBLE | SS_ICON | SS_CENTERIMAGE,
+            10, 7, 32, 32, hDlg, reinterpret_cast<HMENU>(102), nullptr, nullptr);
+        HICON hIco = static_cast<HICON>(LoadImageW(nullptr,
+            MAKEINTRESOURCEW(32516), IMAGE_ICON, 24, 24, LR_SHARED));
+        if (!hIco) hIco = LoadIconW(nullptr, IDI_ASTERISK);
+        SendMessageW(hIcon, STM_SETICON, reinterpret_cast<WPARAM>(hIco), 0);
+
+        HWND hTitle = CreateWindowExW(0, L"STATIC",
+            T(L"Smartcard-Authentifizierung", L"Smartcard Authentication"),
             WS_CHILD | WS_VISIBLE | SS_LEFT,
-            10, 48, 40, 14, hDlg, nullptr, nullptr, nullptr);
+            48, 7, 282, 16, hDlg, reinterpret_cast<HMENU>(103), nullptr, nullptr);
+        SendMessageW(hTitle, WM_SETFONT, reinterpret_cast<WPARAM>(hFontBold), TRUE);
+
+        HWND hSub = CreateWindowExW(0, L"STATIC",
+            T(L"YubiKey einstecken und PIN eingeben.",
+              L"Insert YubiKey and enter PIN."),
+            WS_CHILD | WS_VISIBLE | SS_LEFT,
+            48, 26, 282, 13, hDlg, reinterpret_cast<HMENU>(104), nullptr, nullptr);
+        SendMessageW(hSub, WM_SETFONT, reinterpret_cast<WPARAM>(hFontUI), TRUE);
+
+        // --- Separator ---
+        CreateWindowExW(0, L"STATIC", L"",
+            WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+            0, 46, 340, 1, hDlg, nullptr, nullptr, nullptr);
+
+        // --- PIN row (y 47-84) ---
+        HWND hLbl = CreateWindowExW(0, L"STATIC",
+            T(L"PIN:", L"PIN:"),
+            WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+            10, 56, 32, 22, hDlg, nullptr, nullptr, nullptr);
+        SendMessageW(hLbl, WM_SETFONT, reinterpret_cast<WPARAM>(hFontUI), TRUE);
 
         HWND hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_PASSWORD | ES_AUTOHSCROLL,
-            55, 44, 155, 22, hDlg, reinterpret_cast<HMENU>(IDC_PIN_EDIT), nullptr, nullptr);
+            44, 55, 284, 22, hDlg,
+            reinterpret_cast<HMENU>(IDC_PIN_EDIT), nullptr, nullptr);
         SendMessageW(hEdit, EM_SETLIMITTEXT, 32, 0);
+        SendMessageW(hEdit, WM_SETFONT, reinterpret_cast<WPARAM>(hFontUI), TRUE);
 
-        CreateWindowExW(0, L"BUTTON", T(L"OK", L"OK"),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-            220, 44, 60, 24, hDlg, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+        // Status: small error text between PIN and buttons
+        HWND hStatus = CreateWindowExW(0, L"STATIC", L"",
+            WS_CHILD | WS_VISIBLE | SS_LEFT,
+            10, 80, 320, 13, hDlg,
+            reinterpret_cast<HMENU>(IDC_SC_STATUS), nullptr, nullptr);
+        SendMessageW(hStatus, WM_SETFONT, reinterpret_cast<WPARAM>(hFontUI), TRUE);
 
-        CreateWindowExW(0, L"BUTTON", T(L"Abbrechen", L"Cancel"),
+        // --- Separator ---
+        CreateWindowExW(0, L"STATIC", L"",
+            WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+            0, 96, 340, 1, hDlg, nullptr, nullptr, nullptr);
+
+        // --- Buttons (y 103-127) ---
+        HWND hCancel = CreateWindowExW(0, L"BUTTON",
+            T(L"Abbrechen", L"Cancel"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            220, 74, 60, 24, hDlg, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
+            248, 102, 80, 23, hDlg, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
+        SendMessageW(hCancel, WM_SETFONT, reinterpret_cast<WPARAM>(hFontUI), TRUE);
+
+        HWND hOK = CreateWindowExW(0, L"BUTTON",
+            T(L"OK", L"OK"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+            162, 102, 80, 23, hDlg, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+        SendMessageW(hOK, WM_SETFONT, reinterpret_cast<WPARAM>(hFontUI), TRUE);
 
         SetFocus(hEdit);
         return FALSE;
+    }
+    case WM_CTLCOLORSTATIC:
+    {
+        // Dark blue header background for controls in header area
+        HWND hCtrl = reinterpret_cast<HWND>(lParam);
+        RECT rc; GetWindowRect(hCtrl, &rc);
+        POINT pt = { rc.left, rc.top };
+        ScreenToClient(hDlg, &pt);
+        if (pt.y < 46) // in header zone
+        {
+            HDC hdc = reinterpret_cast<HDC>(wParam);
+            SetBkColor(hdc, RGB(0x1a, 0x3a, 0x5c));
+            SetTextColor(hdc, RGB(0xFF, 0xFF, 0xFF));
+            static HBRUSH hBrHeader = CreateSolidBrush(RGB(0x1a, 0x3a, 0x5c));
+            return reinterpret_cast<INT_PTR>(hBrHeader);
+        }
+        return FALSE;
+    }
+    case WM_DRAWITEM:
+    {
+        // Owner-draw header bar
+        LPDRAWITEMSTRUCT pDI = reinterpret_cast<LPDRAWITEMSTRUCT>(lParam);
+        if (pDI->CtlID == 101)
+        {
+            HBRUSH hBr = CreateSolidBrush(RGB(0x1a, 0x3a, 0x5c));
+            FillRect(pDI->hDC, &pDI->rcItem, hBr);
+            DeleteObject(hBr);
+        }
+        return TRUE;
     }
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK)
@@ -1040,4 +1144,94 @@ void WireGuardTrayApp::_CheckAndRemoveWireGuardShortcut()
             LOG_WARN(L"Tray: WireGuard Shortcut elevated entfernt");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Smartcard presence watcher
+// Monitors card insert/remove events and triggers auto-connect/disconnect.
+// Runs as a background thread, checks card presence every second.
+// ---------------------------------------------------------------------------
+
+void WireGuardTrayApp::_StartSmartcardWatcher()
+{
+    _hScWatchStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!_hScWatchStop) { LOG_WARN(L"SC Watcher: CreateEvent failed"); return; }
+
+    _hScWatchThread = CreateThread(nullptr, 0, _SmartcardWatchThread, this, 0, nullptr);
+    if (!_hScWatchThread)
+    {
+        LOG_WARN(L"SC Watcher: CreateThread failed");
+        CloseHandle(_hScWatchStop);
+        _hScWatchStop = nullptr;
+    }
+    else
+    {
+        LOG_DEBUG(L"Tray: Smartcard watcher started");
+    }
+}
+
+void WireGuardTrayApp::_StopSmartcardWatcher()
+{
+    if (_hScWatchStop)  SetEvent(_hScWatchStop);
+    if (_hScWatchThread)
+    {
+        WaitForSingleObject(_hScWatchThread, 5000);
+        CloseHandle(_hScWatchThread);
+        _hScWatchThread = nullptr;
+    }
+    if (_hScWatchStop)
+    {
+        CloseHandle(_hScWatchStop);
+        _hScWatchStop = nullptr;
+    }
+}
+
+DWORD WINAPI WireGuardTrayApp::_SmartcardWatchThread(LPVOID lpParam)
+{
+    WireGuardTrayApp* pApp = reinterpret_cast<WireGuardTrayApp*>(lpParam);
+    LOG_DEBUG(L"SC Watcher: Thread running");
+
+    bool bCardWasPresentLastTick = false;
+    WCHAR wszReader[256] = {};
+
+    while (WaitForSingleObject(pApp->_hScWatchStop, 1000) == WAIT_TIMEOUT)
+    {
+        // Check whether a PIV card is currently present
+        WCHAR wszFoundReader[256] = {};
+        bool bCardPresent = WGCPFindSmartcard(pApp->_scConfig, wszFoundReader, 256);
+
+        if (bCardPresent && !bCardWasPresentLastTick)
+        {
+            // Card just inserted
+            StringCchCopyW(wszReader, 256, wszFoundReader);
+            LOG_DEBUG(L"SC Watcher: Card inserted");
+
+            if (pApp->_scConfig.bConnectOnInsert && !pApp->_bConnected
+                && pApp->_nProfiles > 0)
+            {
+                LOG_DEBUG(L"SC Watcher: Auto-connect triggered");
+                // Post connect command to main window thread (thread-safe)
+                PostMessageW(pApp->_hWnd, WM_COMMAND,
+                             MAKEWPARAM(IDM_CONNECT, 0), 0);
+            }
+        }
+        else if (!bCardPresent && bCardWasPresentLastTick)
+        {
+            // Card just removed
+            LOG_DEBUG(L"SC Watcher: Card removed");
+
+            if (pApp->_scConfig.bDisconnectOnRemove && pApp->_bConnected)
+            {
+                LOG_DEBUG(L"SC Watcher: Auto-disconnect triggered");
+                PostMessageW(pApp->_hWnd, WM_COMMAND,
+                             MAKEWPARAM(IDM_DISCONNECT, 0), 0);
+            }
+            ZeroMemory(wszReader, sizeof(wszReader));
+        }
+
+        bCardWasPresentLastTick = bCardPresent;
+    }
+
+    LOG_DEBUG(L"SC Watcher: Thread stopped");
+    return 0;
 }

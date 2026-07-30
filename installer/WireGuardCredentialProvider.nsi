@@ -29,10 +29,11 @@ Unicode true
 !include "Sections.nsh"
 
 ; ============================================================
-; Version
+; Version – automatically extracted from the DLL
 ; ============================================================
-!define VERSION      "2026.7.6.0"
-!define VERSION_DISP "2026.7.6"
+!getdllversion "content\WireGuardCredentialProvider.dll" DLL_VER_
+!define VERSION      "${DLL_VER_1}.${DLL_VER_2}.${DLL_VER_3}.${DLL_VER_4}"
+!define VERSION_DISP "${DLL_VER_1}.${DLL_VER_2}.${DLL_VER_3}"
 
 ; ============================================================
 ; Konstanten
@@ -361,6 +362,29 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
             DetailPrint "Kein WireGuard Startmenue-Shortcut gefunden."
         ${EndIf}
 
+        ; -------------------------------------------------------
+        ; Start Menu shortcut (runs as Administrator)
+        ; The RunAsAdministrator flag (byte 21, bit 5) is set via
+        ; PowerShell binary patch on the .lnk file.
+        ; -------------------------------------------------------
+        SetShellVarContext all
+        CreateDirectory "$SMPROGRAMS\${APPNAME}"
+        CreateShortcut "$SMPROGRAMS\${APPNAME}\WireGuard CP Tray.lnk" \
+            "$INSTDIR\WireGuardCPTray.exe" "" \
+            "$INSTDIR\WireGuardCPTray.exe" 0 SW_SHOWNORMAL "" \
+            "WireGuard Credential Provider Tray"
+        ; Write a temp PS1 script to set the RunAsAdministrator flag on the shortcut
+        ; (avoids NSIS $ variable conflicts with PowerShell variables)
+        FileOpen $R5 "$TEMP\wgcp_setadmin.ps1" w
+        FileWrite $R5 "$$lnk = '$SMPROGRAMS\${APPNAME}\WireGuard CP Tray.lnk'$\r$\n"
+        FileWrite $R5 "$$b = [System.IO.File]::ReadAllBytes($$lnk)$\r$\n"
+        FileWrite $R5 "$$b[21] = $$b[21] -bor 0x20$\r$\n"
+        FileWrite $R5 "[System.IO.File]::WriteAllBytes($$lnk, $$b)$\r$\n"
+        FileClose $R5
+        nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$TEMP\wgcp_setadmin.ps1"'
+        Delete "$TEMP\wgcp_setadmin.ps1"
+        DetailPrint "Start Menu shortcut created (runs as Administrator)."
+
         ${EnableX64FSRedirection}
 
         ; -------------------------------------------------------
@@ -518,8 +542,12 @@ SectionGroup /e "un.${APPNAME}" SecGrpUninstall
         DetailPrint "Entferne Tray-App Autostart..."
         DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "WireGuardCPTray"
 
-        ; WireGuard Startmenue-Shortcut wiederherstellen
+        ; Remove tray app Start Menu shortcut
         SetShellVarContext all
+        Delete "$SMPROGRAMS\${APPNAME}\WireGuard CP Tray.lnk"
+        RMDir "$SMPROGRAMS\${APPNAME}"
+
+        ; Restore WireGuard Start Menu shortcut
         ${If} ${FileExists} "$INSTDIR\backup\WireGuard.lnk"
             CopyFiles /SILENT "$INSTDIR\backup\WireGuard.lnk" "$SMPROGRAMS\WireGuard.lnk"
             DetailPrint "WireGuard Startmenue-Shortcut wiederhergestellt."

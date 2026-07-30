@@ -134,7 +134,14 @@ private:
     void _StopWireGuardWatcher();
     static DWORD WINAPI _WatcherThread(LPVOID lpParam);
     HANDLE _hWatcherThread;
-    HANDLE _hWatcherStop;   // Event zum Beenden des Threads
+    HANDLE _hWatcherStop;
+
+    // Smartcard presence watcher (auto-connect / auto-disconnect)
+    void _StartSmartcardWatcher();
+    void _StopSmartcardWatcher();
+    static DWORD WINAPI _SmartcardWatchThread(LPVOID lpParam);
+    HANDLE _hScWatchThread;
+    HANDLE _hScWatchStop;
 
     void _Log(DWORD level, PCWSTR msg)
     {

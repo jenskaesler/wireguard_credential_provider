@@ -757,9 +757,27 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
         return false;
     }
 
+    // Log all available readers
+    LOG_DEBUG(L"SC: Available readers:");
+    for (LPCWSTR pLog = pwszReaders; *pLog; pLog += wcslen(pLog) + 1)
+    {
+        WCHAR dLog[320] = {};
+        StringCchPrintfW(dLog, 320, L"SC:   -> '%s'", pLog);
+        LOG_DEBUG(dLog);
+    }
+
     bool bFound = false;
     for (LPCWSTR p = pwszReaders; *p; p += wcslen(p) + 1)
     {
+        // Skip virtual SIM/UICC readers – they are not PIV-capable smartcard readers
+        if (wcsstr(p, L"UICC") || wcsstr(p, L"SIM") || wcsstr(p, L"Microsoft UICC"))
+        {
+            WCHAR dSkip[320] = {};
+            StringCchPrintfW(dSkip, 320, L"SC: Skipping virtual reader '%s'", p);
+            LOG_DEBUG(dSkip);
+            continue;
+        }
+
         WCHAR d[320] = {};
         StringCchPrintfW(d, 320, L"SC: Checking reader '%s'", p);
         LOG_DEBUG(d);
@@ -842,36 +860,46 @@ inline bool WGCPVerifyCertThumbprint(SCARDHANDLE hCard, PCWSTR pwszExpected)
 
     // Read ATR and verify certificate via CryptoAPI
     // Open card as smartcard store
-    HCERTSTORE hStore = CertOpenStore(
-        CERT_STORE_PROV_SYSTEM_W, 0, 0,
-        CERT_SYSTEM_STORE_LOCAL_MACHINE | CERT_STORE_READONLY_FLAG,
-        L"MY");
-    if (!hStore) return false;
-
-    bool bMatch = false;
-    PCCERT_CONTEXT pCert = nullptr;
-    while ((pCert = CertEnumCertificatesInStore(hStore, pCert)) != nullptr)
+    // Helper lambda: search one store for the expected thumbprint
+    auto SearchStore = [&](DWORD dwFlags, PCWSTR pwszStore) -> bool
     {
-        // Compute SHA1 thumbprint
-        BYTE  rgThumb[20] = {};
-        DWORD cbThumb     = sizeof(rgThumb);
-        if (!CertGetCertificateContextProperty(pCert, CERT_SHA1_HASH_PROP_ID,
-                                               rgThumb, &cbThumb))
-            continue;
+        HCERTSTORE hStore = CertOpenStore(
+            CERT_STORE_PROV_SYSTEM_W, 0, 0,
+            dwFlags | CERT_STORE_READONLY_FLAG,
+            pwszStore);
+        if (!hStore) return false;
 
-        // As hex string
-        WCHAR wszThumb[48] = {};
-        for (DWORD i = 0; i < cbThumb; i++)
-            StringCchPrintfW(wszThumb + i*2, 3, L"%02X", rgThumb[i]);
-
-        if (_wcsicmp(wszThumb, pwszExpected) == 0)
+        PCCERT_CONTEXT pCert = nullptr;
+        while ((pCert = CertEnumCertificatesInStore(hStore, pCert)) != nullptr)
         {
-            bMatch = true;
-            CertFreeCertificateContext(pCert);
-            break;
+            BYTE  rgThumb[20] = {};
+            DWORD cbThumb     = sizeof(rgThumb);
+            if (!CertGetCertificateContextProperty(pCert, CERT_SHA1_HASH_PROP_ID,
+                                                   rgThumb, &cbThumb))
+                continue;
+
+            WCHAR wszThumb[48] = {};
+            for (DWORD i = 0; i < cbThumb; i++)
+                StringCchPrintfW(wszThumb + i*2, 3, L"%02X", rgThumb[i]);
+
+            if (_wcsicmp(wszThumb, pwszExpected) == 0)
+            {
+                CertFreeCertificateContext(pCert);
+                CertCloseStore(hStore, 0);
+                return true;
+            }
         }
-    }
-    CertCloseStore(hStore, 0);
+        CertCloseStore(hStore, 0);
+        return false;
+    };
+
+    // Search Current User MY store first (YubiKey Minidriver publishes here)
+    bool bMatch = SearchStore(CERT_SYSTEM_STORE_CURRENT_USER, L"MY");
+
+    // Fallback: Local Machine MY store (machine-scoped certificates)
+    if (!bMatch)
+        bMatch = SearchStore(CERT_SYSTEM_STORE_LOCAL_MACHINE, L"MY");
+
     if (bMatch)
         LOG_DEBUG(L"SC: Thumbprint verification successful");
     else
@@ -909,10 +937,20 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
     LONG lRet = SCardConnectW(hCtx, wszReader,
                                SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1,
                                &hCard, &dwProto);
+    if (lRet == SCARD_S_SUCCESS)
+    {
+        WCHAR eP[64] = {};
+        StringCchPrintfW(eP, 64, L"Smartcard: Connected proto=%s",
+                         dwProto == SCARD_PROTOCOL_T0 ? L"T=0" : L"T=1");
+        LOG_DEBUG(eP);
+    }
     if (lRet != SCARD_S_SUCCESS)
     {
+        WCHAR eC[96] = {};
+        StringCchPrintfW(eC, 96,
+            L"Smartcard: SCardConnect failed lRet=0x%08X reader='%s'", lRet, wszReader);
+        LOG_WARN(eC);
         SCardReleaseContext(hCtx);
-        LOG_WARN(L"Smartcard: SCardConnect failed");
         return WGCPScResult::Error;
     }
 
@@ -946,11 +984,34 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
                           0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
         memcpy(apdu + 5, szPin, (dwPinLen < 8u ? dwPinLen : 8u));
 
-        BYTE   resp[2]  = {};
-        DWORD  dwRecv   = sizeof(resp);
-        SCARD_IO_REQUEST ioReq = { dwProto, sizeof(SCARD_IO_REQUEST) };
+        // Response buffer: 258 bytes (max APDU response + 2 SW bytes).
+        // A 2-byte buffer causes ERROR_INVALID_PARAMETER (0x57) on some readers.
+        BYTE   resp[258] = {};
+        DWORD  dwRecv    = sizeof(resp);
         const SCARD_IO_REQUEST* pProto = (dwProto == SCARD_PROTOCOL_T0)
                                        ? SCARD_PCI_T0 : SCARD_PCI_T1;
+
+        // SELECT PIV Application before VERIFY
+        // Required for NFC readers (Microsoft UICC) and some USB readers.
+        // AID: A0 00 00 03 08 00 00 10 00 01 00 (NIST PIV)
+        BYTE selectApdu[] = {
+            0x00, 0xA4, 0x04, 0x00, 0x0B,
+            0xA0, 0x00, 0x00, 0x03, 0x08, 0x00, 0x00, 0x10, 0x00, 0x01, 0x00
+        };
+        BYTE   selResp[258] = {};
+        DWORD  dwSelRecv    = sizeof(selResp);
+        LONG   lSel = SCardTransmit(hCard, pProto, selectApdu, sizeof(selectApdu),
+                                    nullptr, selResp, &dwSelRecv);
+        WCHAR eSel[96] = {};
+        StringCchPrintfW(eSel, 96,
+            L"Smartcard: SELECT PIV lRet=0x%08X SW=%02X%02X",
+            lSel, dwSelRecv >= 2 ? selResp[dwSelRecv-2] : 0,
+                  dwSelRecv >= 1 ? selResp[dwSelRecv-1] : 0);
+        LOG_DEBUG(eSel);
+
+        WCHAR eA[64] = {};
+        StringCchPrintfW(eA, 64, L"Smartcard: Sending VERIFY APDU (pinLen=%lu)", dwPinLen);
+        LOG_DEBUG(eA);
 
         lRet = SCardTransmit(hCard, pProto, apdu, sizeof(apdu),
                              nullptr, resp, &dwRecv);
@@ -961,15 +1022,22 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
 
         if (lRet != SCARD_S_SUCCESS)
         {
+            WCHAR eT[96] = {};
+            StringCchPrintfW(eT, 96,
+                L"Smartcard: SCardTransmit failed lRet=0x%08X", lRet);
+            LOG_WARN(eT);
             SCardDisconnect(hCard, SCARD_LEAVE_CARD);
             SCardReleaseContext(hCtx);
-            LOG_WARN(L"Smartcard: SCardTransmit failed");
             return WGCPScResult::Error;
         }
 
         // SW1=90, SW2=00 -> success
         // SW1=63, SW2=CX -> X attempts remaining
         // SW1=69, SW2=83 -> PIN locked
+        WCHAR eR[64] = {};
+        StringCchPrintfW(eR, 64, L"Smartcard: APDU response SW1=0x%02X SW2=0x%02X", resp[0], resp[1]);
+        LOG_DEBUG(eR);
+
         if (resp[0] == 0x90 && resp[1] == 0x00)
         {
             LOG_DEBUG(L"Smartcard: PIN verification successful");
