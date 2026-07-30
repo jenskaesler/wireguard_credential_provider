@@ -1,0 +1,63 @@
+Windows Registry Editor Version 5.00
+
+; ============================================================
+; WireGuard Credential Provider - Configuration
+; ============================================================
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Jens Kaesler\WireGuard Credential Provider]
+
+; Path to wireguard.exe
+"ExePath"="C:\\Program Files\\WireGuard\\wireguard.exe"
+
+; Path to wg.exe (traffic statistics)
+"WgExePath"="C:\\Program Files\\WireGuard\\wg.exe"
+
+; Label shown on the tile
+"TileLabel"="WireGuard VPN"
+
+; Custom icons (optional - leave empty to use embedded resource)
+"IconConnected"=""
+"IconDisconnected"=""
+
+; Log file path
+; Placeholder ddMMyyyy is replaced with the current date
+; %INSTALLDIR% is replaced with the installation directory (set by installer)
+; Example: C:\Program Files\Jens Kaesler\WireGuard Credential Provider\logs\wgcp_23072026.log
+"LogPath"=""
+
+; Log level: 0=off, 1=CRIT (default), 2=WARN+CRIT, 3=DEBUG+WARN+CRIT
+"LogLevel"=dword:00000001
+
+; Log rotation: logs older than this number of days are deleted on startup
+"LogRetentionDays"=dword:00000007
+
+; ============================================================
+; Smartcard / YubiKey PIV Configuration
+; ============================================================
+
+; Enable smartcard authentication (0=off, 1=on)
+"SmartcardEnabled"=dword:00000000
+
+; PIN required (0=no, 1=yes)
+"SmartcardPinRequired"=dword:00000001
+
+; Minimum PIN length
+"SmartcardPinMinLength"=dword:00000004
+
+; Maximum failed attempts before warning
+"SmartcardPinMaxAttempts"=dword:00000003
+
+; Seconds to wait for card before timeout
+"SmartcardTimeout"=dword:0000000A
+
+; Automatically connect tunnel when YubiKey is inserted (0=no, 1=yes)
+"SmartcardConnectOnInsert"=dword:00000000
+
+; Automatically disconnect tunnel when YubiKey is removed (0=no, 1=yes)
+"SmartcardDisconnectOnRemove"=dword:00000000
+
+; Restrict to a specific reader (empty = first available)
+"SmartcardReaderName"=""
+
+; SHA1 thumbprint of expected certificate (empty = any PIV certificate)
+"SmartcardCertThumbprint"=""

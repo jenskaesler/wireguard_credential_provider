@@ -1,0 +1,251 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Versioning follows the scheme `<Year>.<Month>.<Release>`.
+
+---
+
+## [2026.7.30] – 2026-07-30
+
+### Added
+- **Post-Logon Tray Application** (`WireGuardCPTray.exe`) – replaces the WireGuard UI for managed machines
+  - System tray icon with color-coded lock icons (green = connected, red = disconnected)
+  - Context menu: connection status header, active profile line, connect/disconnect, profile submenu
+  - Profile import: file dialog → elevated copy to WireGuard config directory
+  - Config folder shortcut (opens as Administrator due to WireGuard ACLs)
+  - Bilingual UI: German / English based on `GetUserDefaultUILanguage()`
+  - Dark Mode support via `SetPreferredAppMode` (uxtheme.dll ordinals 133/135/136)
+  - Autostart via `HKLM\Software\Microsoft\Windows\CurrentVersion\Run` (all users)
+  - Single-instance guard via named mutex
+  - Shell taskbar readiness wait loop on autostart (prevents silent `Shell_NotifyIconW` failure)
+  - Smartcard / YubiKey PIV authentication gate before every tunnel connect (same code path as CP DLL)
+  - WireGuard UI watcher thread: kills `wireguard.exe` if a visible window is detected (runs every 500ms, hides window before terminating to prevent flash)
+  - Start Menu shortcut watchdog: removes WireGuard shortcut after updates; backs up before first removal
+- **Installer overhaul** (`WireGuardCredentialProvider.nsi`)
+  - WireGuard auto-install: silently downloads and installs WireGuard if not present (inetc plugin, TLS 1.2)
+  - Component pages: **Simple** (CP only), **Full** (CP + all YubiKey tools), **Custom** (free selection)
+  - YubiKey Authenticator (v7.4.1), Minidriver (latest), Manager CLI (v5.9.2) – optional downloads
+  - Silent deployment parameters: `/S`, `/FULL`, `/YKAUTH`, `/YKMINI`, `/YKMGRCLI`
+  - WireGuard Start Menu shortcut: backed up to `INSTDIR\backup\`, removed on install, restored on uninstall
+  - Bilingual installer strings (German / English)
+  - `QuietUninstallString` set in registry for MDM-compatible silent uninstall
+- **Tray icons**: custom ICO files with alpha channel and multiple sizes (16×16, 32×32, 48×48)
+- **Application icon** (`icon.ico`) embedded in `WireGuardCPTray.exe` (resource ID 1, visible in taskbar and autostart manager)
+- **`resource.h`**: `IDI_TRAY_CONNECTED (103)` and `IDI_TRAY_DISCONNECTED (104)` for tray-specific icons
+
+### Changed
+- `helpers.h`: `WGCP_TRAY_BUILD` preprocessor guard splits CP-only headers from tray build
+- `helpers.h`: `WGGetConfigDir()` replaces hardcoded `WG_CONFIG_DIR` define; reads `ConfigDir` from registry with fallback chain
+- `helpers.h`: `WGEnumProfiles()` uses `*.dpapi` search pattern with manual extension check (Windows `FindFirstFileW` does not support compound extensions)
+- `helpers.h`: `WGConnect()` validates config file and `wireguard.exe` existence before spawning, logs exit code, uses `CREATE_NO_WINDOW`
+- `helpers.h`: `WGDisconnect()` now uses `CREATE_NO_WINDOW` and logs exit code (consistent with `WGConnect`)
+- `helpers.h`: `WGIsTunnelConnected()` logs service name and current state on every call
+- `helpers.h`: `WGGetConnectedSince()` returns bilingual label ("Verbunden seit" / "Connected since")
+- `WireGuardCredentialProvider.nsi`: `ExePath`, `WgExePath`, `ConfigDir` always overwritten on install/update (not just first install)
+- `build.bat`: extended with `TRAY_SRC` check and copy; WireGuard binaries no longer bundled in installer
+- Registry key `HKLM\SOFTWARE\Jens Kaesler\WireGuard Credential Provider` is now the single source of truth for both components
+- All source code comments converted to English throughout
+
+### Fixed
+- `WireGuardTray.h`: orphaned `// FIX: std::nothrow` comment removed; correct include annotations added
+- `WireGuardTray.cpp`: dead first `EnumWindows` call in watcher thread removed (variable `bHasWindow` was unused)
+- `WireGuardTray.rc`: ICO resources referenced by simple filename (files placed in `tray-app\resources\` next to the `.rc` file)
+- `WireGuardTray.vcxproj`: `$(ProjectDir)resources` added to RC compiler include path
+- NSIS: `$PROGRAMDATA` / `$COMMONAPPDATA` replaced with `ReadEnvStr` / `!define` workarounds (NSIS does not expand these natively with spaces in path)
+- NSIS: `NSISdl` replaced with `inetc` plugin for all downloads (NSISdl does not support TLS 1.2/1.3)
+
+
+---
+
+
+## [2026.7.6] – 2026-07-29
+
+### Changed
+- Registry key moved to `HKEY_LOCAL_MACHINE\SOFTWARE\Jens Kaesler\WireGuard Credential Provider` (previously `SOFTWARE\WireGuardCredentialProvider`) – applies to the credential provider, shutdown service, installer, and `configure.reg`
+- All source code comments, log messages, and UI strings fully translated to English
+- Embedded icons updated to new connected/disconnected design
+- `installer/README.md` translated to English
+
+### Fixed
+- `min()` call in smartcard PIN copy replaced with explicit ternary – `NOMINMAX` was defined, making `min()` unavailable
+- Duplicate `SetStringValue` stub removed (caused linker error after previous refactor)
+
+### Migration
+Existing installations using the old registry key (`SOFTWARE\WireGuardCredentialProvider`) must re-run the installer or manually export and re-import the configuration under the new key path. The uninstaller cleans up the old key if present.
+
+---
+
+## [2026.7.14] – 2026-07-25
+
+### Added
+- Comprehensive debug logging across all smartcard functions:
+  - `WGCPLoadSmartcardConfig` – logs all config values after loading
+  - `WGCPFindSmartcard` – logs each reader checked and result
+  - `WGCPWaitForCard` – logs wait start with timeout value
+  - `WGCPIsCardRemoved` – logs card removal event
+  - `WGCPVerifyCertThumbprint` – logs thumbprint being checked and match result
+  - `WGCPAuthenticateSmartcard` – logs `SCardListReaders` errors
+  - `SetStringValue` – logs PIN received (length only, never content)
+  - `_UpdateScStatus` – logs every status change to file
+  - `_DoSmartcardAuth` – logs auth start, PIN length, disabled case
+  - `_ScWatchThreadProc` – logs auto-connect/disconnect with tunnel name
+
+---
+
+## [2026.7.13] – 2026-07-25
+
+### Added
+- **Smartcard / YubiKey PIV authentication** – optional second factor before connecting a tunnel
+- PIN entry field (password type) on the credential tile – hidden when smartcard is disabled
+- Smartcard status field on the credential tile – shows card state and error messages
+- PIN verification via VERIFY APDU (ISO 7816-4, PIV slot 80h) using WinSCard API
+- Optional certificate thumbprint validation via CryptoAPI (SHA-1)
+- Auto-connect when card is inserted (`SmartcardConnectOnInsert`)
+- Auto-disconnect when card is removed (`SmartcardDisconnectOnRemove`)
+- Background watch thread monitors card presence every second
+- Remaining attempt count displayed after a wrong PIN entry
+- PIN locked detection (SW `69 83`) with user-visible message
+- PIN securely zeroed from memory after use (`SecureZeroMemory`)
+- Compatible with YubiKey 5 series, standard PIV smartcards, and any CCID device
+
+New registry values (all disabled by default):
+
+| Value | Description |
+|---|---|
+| `SmartcardEnabled` | Enable smartcard authentication |
+| `SmartcardPinRequired` | Require PIN before connecting |
+| `SmartcardPinMinLength` | Minimum PIN length |
+| `SmartcardPinMaxAttempts` | Max failed attempts before warning |
+| `SmartcardTimeout` | Seconds to wait for card |
+| `SmartcardConnectOnInsert` | Auto-connect on card insert |
+| `SmartcardDisconnectOnRemove` | Auto-disconnect on card removal |
+| `SmartcardReaderName` | Restrict to a specific reader |
+| `SmartcardCertThumbprint` | Expected SHA-1 certificate thumbprint |
+
+---
+
+## [2026.7.12] – 2026-07-24
+
+### Changed
+- General code cleanup and refactoring ahead of smartcard feature
+
+---
+
+## [2026.7.11] – 2026-07-24
+
+### Fixed
+- Installer: use `robocopy.exe` to copy DLL to `System32` (bypasses WOW64 filesystem redirection from 32-bit NSIS process)
+- Installer: disable WOW64 filesystem redirector explicitly before System32 operations
+- Installer: kill `LogonUI.exe` before copying DLL to release the file lock
+- Installer: use `$WINDIR\System32` instead of NSIS `$SYSDIR` to avoid redirection
+- Installer: replace `.reg` import with direct `WriteRegStr`/`WriteRegDWORD` calls for reliability
+- Installer: enforce Administrator elevation via UAC manifest
+
+---
+
+## [2026.7.5] – 2026-07-24
+
+### Added
+- Log rotation: `LogRetentionDays` (default: 7) – logs older than N days are automatically deleted on `Initialize`
+- Log path supports date placeholder `ddMMyyyy` → daily log files (e.g. `wgcp_24072026.log`)
+- `InstallDir` is written to the Registry by the installer and used as the base path for log files
+- Installer creates a `logs\` subfolder in the installation directory
+- `configure.reg` integrated into the installer (`installer/content/`) – imported automatically on first install
+- Added `_DisconnectAllOnBoot` declaration in `WireGuardCredential.h` (fixes compiler error)
+
+### Changed
+- `LogLevel` default changed: `0` → `1` (CRIT) – critical errors are always logged
+- Icons (connected/disconnected) reverted to the original WireGuard logo – cleanly RGBA-composited on green and red backgrounds respectively
+- `deploy/` directory dissolved: `configure.reg` moved to `installer/content/`, `install.bat`/`uninstall.bat` removed (replaced by the installer)
+- `.gitignore` updated
+
+---
+
+## [2026.7.4] – 2026-07-23
+
+### Changed
+- Field definitions (`g_rgFields`, `g_rgFieldStates`) extracted into central header `FieldDescriptors.h` – eliminates duplicate definitions in `WireGuardProvider.cpp` and `WireGuardCredential.cpp`
+- `_bConnected`, `_bSelected` and `_bStopTimer` marked as `volatile` – ensures correct visibility between timer thread and UI thread
+- Shutdown service uses `CREATE_NO_WINDOW` when launching `wireguard.exe` – prevents brief console window flash during shutdown
+- `static_assert` in `FieldDescriptors.h` verifies at compile time that field count and `FI_NUM_FIELDS` are consistent
+
+### Fixed
+- Removed `_DisconnectAllOnBoot()` – the function incorrectly disconnected active tunnels immediately after connecting
+- `WireGuardShutdownService` was disconnecting tunnels on service start instead of only on the `PRESHUTDOWN` event
+- Fixed infinite loop caused by `CredentialsChanged` → `SetSelected` → `_UpdateFields` → `CredentialsChanged`: `NotifyStatusChanged()` is now called exclusively in `CommandLinkClicked` after an actual connect/disconnect action
+
+---
+
+## [2026.7.3] – 2026-07-23
+
+### Added
+- **WireGuardShutdownService**: standalone Windows service that listens for `SERVICE_CONTROL_PRESHUTDOWN` and cleanly disconnects all active WireGuard tunnels on PC shutdown
+- Preshutdown timeout of 30 seconds configured – sufficient time to terminate all tunnels
+- `install.bat` and `uninstall.bat` now install/uninstall both components (DLL + service) in a single step
+- Manual test mode: `WireGuardShutdownService.exe /run` disconnects all tunnels without restarting
+
+### Changed
+- Shutdown listener window switched from `HWND_MESSAGE` to a visible top-level window (`WS_POPUP`, 0×0 pixels) – `HWND_MESSAGE` windows do not reliably receive `WM_ENDSESSION`
+
+---
+
+## [2026.7.2] – 2026-07-23
+
+### Added
+- **Automatic status refresh** every 5 seconds when the tile is selected (background thread)
+- **Connection timer**: `⏱ Connected since HH:MM:SS` – reads the process start time of the tunnel service
+- **Traffic statistics**: `↑ X MB ↓ Y MB` via `wg.exe show <profile> transfer` – shown only when connected
+- **Color-coded icons**: two separate BMP resources (`wireguard_connected.bmp`, `wireguard_disconnected.bmp`) embedded directly into the DLL
+- Icons integrated as project resources – no external files required at runtime
+- `ICredentialProviderEvents::CredentialsChanged` called after connect/disconnect to force icon reload
+- `wg.exe` path configurable via Registry value `WgExePath`
+
+### Changed
+- Disconnect command corrected: `/removetunnelservice` → `/uninstalltunnelservice` (correct WireGuard command name)
+- Removed quotes around tunnel name for `/uninstalltunnelservice` – WireGuard expects the name without quotes
+- After connect/disconnect: active polling for service status change instead of fixed `Sleep(2000)`
+- `GetModuleHandleExW` anchor changed from member function pointer to static helper function
+
+---
+
+## [2026.7.1] – 2026-07-23
+
+### Added
+- **Profile dropdown (ComboBox)**: lists all `.conf.dpapi` configurations from the WireGuard configuration directory
+- **Automatic default profile**: searches for a configuration file matching the computer name (e.g. `PC01.conf.dpapi`)
+- **Connect/Disconnect button**: `▶ Connect` / `⏏ Disconnect` – grayed out when no profile is available
+- **Status display**: `● Connected` / `○ Disconnected` as a text field below the label
+- Connect tunnel via `wireguard.exe /installtunnelservice <path-to-config>`
+- Disconnect tunnel via `wireguard.exe /uninstalltunnelservice <tunnelname>`
+- Connection status detection via Windows service `WireGuardTunnel$<ProfileName>`
+- Log level and log path configurable via Registry (`LogLevel` DWORD: 0=off, 1=CRIT, 2=WARN, 3=DEBUG)
+- Configurable icons for connected/disconnected state (`IconConnected`, `IconDisconnected`)
+
+### Changed
+- Tile click no longer launches an external program instance – connect/disconnect is handled directly via the WireGuard service mechanism
+- `_UpdateFields` updates status text, traffic and button label without re-enumeration
+
+---
+
+## [2026.7.0] – 2026-07-23
+
+### Added
+- **WireGuard Credential Provider** as a Windows DLL (`ICredentialProvider` + `ICredentialProviderCredential`)
+- Tile appears on the Windows login screen and lock screen (Logon + Unlock)
+- Configuration entirely via Registry (`HKLM\SOFTWARE\WireGuardCredentialProvider`)
+- Configurable path to `wireguard.exe` (`ExePath`)
+- Configurable tile label (`TileLabel`)
+- Configurable tile icon (`IconPath`, 128×128 px, 24bpp BMP)
+- File-based logging with timestamp (`LogPath`, `LogLevel`)
+- `regsvr32`-compatible registration/unregistration (`DllRegisterServer`/`DllUnregisterServer`)
+- Installation scripts: `install.bat`, `uninstall.bat`, `configure.reg`
+- Visual Studio 2022 project files (`.sln`, `.vcxproj`)
+
+### Technical Foundation
+- COM in-process server with `IClassFactory`
+- Thread-safe reference counting via `InterlockedIncrement`/`InterlockedDecrement`
+- Unicode throughout (`WCHAR`, `W`-suffix APIs)
+- All strings via `StringCch*` family (no unsafe `strcpy`/`sprintf`)
+- Resources via `CoTaskMemAlloc`/`CoTaskMemFree` per COM convention

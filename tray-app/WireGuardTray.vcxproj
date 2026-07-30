@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{B2C3D4E5-F6A7-8901-BCDE-F01234567890}</ProjectGuid>
+    <RootNamespace>WireGuardTray</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <!-- Output paths -->
+  <PropertyGroup>
+    <OutDir>$(SolutionDir)tray-app\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)tray-app\$(Platform)\$(Configuration)\int\</IntDir>
+    <TargetName>WireGuardCPTray</TargetName>
+  </PropertyGroup>
+
+  <!-- Compiler settings -->
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization>
+      <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization>
+      <PreprocessorDefinitions>
+        WIN32;_WINDOWS;UNICODE;_UNICODE;
+        NTDDI_VERSION=0x06010000;
+        _WIN32_WINNT=0x0601;
+        STRSAFE_NO_DEPRECATE;
+        %(PreprocessorDefinitions)
+      </PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>
+        $(SolutionDir)src;
+        $(SolutionDir)resources;
+        %(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <SDLCheck>true</SDLCheck>
+      <!-- Treat warnings as errors in Release -->
+      <TreatWarningAsError Condition="'$(Configuration)'=='Release'">true</TreatWarningAsError>
+    </ClCompile>
+
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>
+        winscard.lib;
+        crypt32.lib;
+        comctl32.lib;
+        shell32.lib;
+        advapi32.lib;
+        shlwapi.lib;
+        user32.lib;
+        %(AdditionalDependencies)
+      </AdditionalDependencies>
+      <EnableCOMDATFolding Condition="'$(Configuration)'=='Release'">true</EnableCOMDATFolding>
+      <OptimizeReferences Condition="'$(Configuration)'=='Release'">true</OptimizeReferences>
+      <!-- Manifest for visual styles and DPI awareness -->
+      <ManifestFile>$(ProjectDir)resources\WireGuardTray.manifest</ManifestFile>
+    </Link>
+
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(SolutionDir)resources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- Pass BMP paths as string macros so the RC compiler finds them regardless of working dir -->
+      <PreprocessorDefinitions>WGCP_BMP_CONN="$(SolutionDir)resources\wireguard_connected.bmp";WGCP_BMP_DISC="$(SolutionDir)resources\wireguard_disconnected.bmp";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
+  </ItemDefinitionGroup>
+
+  <!-- Source files -->
+  <ItemGroup>
+    <ClCompile Include="src\WireGuardTray.cpp" />
+    <ClCompile Include="src\main.cpp" />
+  </ItemGroup>
+
+  <!-- Header files -->
+  <ItemGroup>
+    <ClInclude Include="src\WireGuardTray.h" />
+    <!-- helpers.h is included via WireGuardTray.h, listed here for IDE navigation -->
+    <ClInclude Include="$(SolutionDir)src\helpers.h" />
+  </ItemGroup>
+
+  <!-- Resources -->
+  <ItemGroup>
+    <ResourceCompile Include="resources\WireGuardTray.rc" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+</Project>
