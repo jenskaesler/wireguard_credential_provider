@@ -365,9 +365,6 @@ void WireGuardTrayApp::_ShowContextMenu()
     AppendMenuW(hMenu, MF_STRING, IDM_IMPORT,
                 T(L"\U0001F4C2  Profil importieren (.conf)...",
                   L"\U0001F4C2  Import profile (.conf)..."));
-    AppendMenuW(hMenu, MF_STRING, IDM_OPEN_CONFIG_DIR,
-                T(L"\U0001F4C1  Konfig-Ordner \u00f6ffnen",
-                  L"\U0001F4C1  Open config folder"));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, IDM_EXIT,
                 T(L"Beenden", L"Exit"));
@@ -509,8 +506,8 @@ bool WireGuardTrayApp::_DoSmartcardAuth()
         break;
     case WGCPScResult::WrongCard:
         StringCchCopyW(wszMsg, ARRAYSIZE(wszMsg),
-                       T(L"Falsche Smartcard.\nZertifikat-Fingerabdruck stimmt nicht \u00fcberein.",
-                         L"Wrong smartcard.\nCertificate thumbprint does not match."));
+                       T(L"Falscher YubiKey.\nZertifikat-Fingerabdruck stimmt nicht \u00fcberein.",
+                         L"Wrong YubiKey.\nCertificate thumbprint does not match."));
         break;
     case WGCPScResult::PinWrong:
         StringCchCopyW(wszMsg, ARRAYSIZE(wszMsg),
@@ -534,8 +531,8 @@ bool WireGuardTrayApp::_DoSmartcardAuth()
 
     if (!bOk && wszMsg[0])
         MessageBoxW(_hWnd, wszMsg,
-                    T(L"WireGuard VPN \u2013 Smartcard-Authentifizierung",
-                      L"WireGuard VPN \u2013 Smartcard Authentication"),
+                    T(L"WireGuard VPN \u2013 YubiKey-Authentifizierung",
+                      L"WireGuard VPN \u2013 YubiKey Authentication"),
                     MB_ICONWARNING | MB_OK);
 
     return bOk;
@@ -621,7 +618,7 @@ INT_PTR CALLBACK WireGuardTrayApp::_PinDlgProc(HWND hDlg, UINT msg,
         SendMessageW(hIcon, STM_SETICON, reinterpret_cast<WPARAM>(hIco), 0);
 
         HWND hTitle = CreateWindowExW(0, L"STATIC",
-            T(L"Smartcard-Authentifizierung", L"Smartcard Authentication"),
+            T(L"YubiKey-Authentifizierung", L"YubiKey Authentication"),
             WS_CHILD | WS_VISIBLE | SS_LEFT,
             48, 7, 282, 16, hDlg, reinterpret_cast<HMENU>(103), nullptr, nullptr);
         SendMessageW(hTitle, WM_SETFONT, reinterpret_cast<WPARAM>(hFontBold), TRUE);

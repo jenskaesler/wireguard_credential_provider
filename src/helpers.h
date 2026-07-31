@@ -16,8 +16,12 @@
 #include <winuser.h>
 #include <strsafe.h>
 #include <winsvc.h>
+#include <wincrypt.h>
+#include <wincred.h>   // CredUIPromptForCredentialsW  // DATA_BLOB, CryptProtectData, CryptUnprotectData
+#include <dpapi.h>     // CRYPTPROTECT_LOCAL_MACHINE
 
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "crypt32.lib")
 
 #ifndef WGCP_TRAY_BUILD
   // CP DLL only
@@ -77,7 +81,7 @@
 #define WGCP_DEFAULT_LABEL        L"WireGuard VPN"
 #define WGCP_DEFAULT_ICONCONN     L""
 #define WGCP_DEFAULT_ICONDISCONN  L""
-#define WGCP_DEFAULT_LOGLEVEL     1
+#define WGCP_DEFAULT_LOGLEVEL     3  // DEBUG: log everything by default
 #define WGCP_DEFAULT_LOGRETENTION 7
 
 // Smartcard defaults
@@ -181,6 +185,15 @@ inline void WGGetConfigDir(WCHAR* pwszOut, DWORD cchOut)
 // Placeholder: %INSTALLDIR% -> installation directory from registry
 //              Filename may contain ddMMyyyy -> will be substituted
 // Example: %INSTALLDIR%\logs\wgcp_ddMMyyyy.log
+
+// Returns true if running in the tray app (post-logon) vs CP DLL (pre-logon/SYSTEM)
+static inline bool WGCPIsTraySuffix()
+{
+    WCHAR wszExe[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, wszExe, MAX_PATH);
+    return (wcsstr(wszExe, L"Tray") != nullptr || wcsstr(wszExe, L"tray") != nullptr);
+}
+
 // ---------------------------------------------------------------------------
 inline void WGCPResolvLogPath(WCHAR* pwszOut, DWORD cchOut)
 {
@@ -208,7 +221,8 @@ inline void WGCPResolvLogPath(WCHAR* pwszOut, DWORD cchOut)
         else
         {
             StringCchPrintfW(pwszOut, cchOut,
-                             L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log",
+                             WGCPIsTraySuffix() ? L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log"
+                                            : L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log",
                              st.wDay, st.wMonth, st.wYear);
         }
         return;
@@ -318,26 +332,46 @@ inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
     WCHAR wszPath[MAX_PATH_WGCP] = {};
     WGCPResolvLogPath(wszPath, MAX_PATH_WGCP);
 
-    // Create log directory
-    WCHAR wszDir[MAX_PATH_WGCP] = {};
-    StringCchCopyW(wszDir, MAX_PATH_WGCP, wszPath);
-    WCHAR* pSlash = wcsrchr(wszDir, L'\\');
-    if (pSlash) { *pSlash = L'\0'; SHCreateDirectoryExW(nullptr, wszDir, nullptr); }
-
-    // Open or create log file
-    HANDLE hFile = CreateFileW(wszPath, FILE_APPEND_DATA, FILE_SHARE_READ,
-                               nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hFile == INVALID_HANDLE_VALUE) return;
-
-    // Write BOM on first write
-    LARGE_INTEGER liSize = {}; GetFileSizeEx(hFile, &liSize);
-    if (liSize.QuadPart == 0)
+    // Create log directory - if it fails (SYSTEM cannot write to Program Files)
+    // switch to C:\Windows\Temp which is always writable
     {
-        WORD wBOM = 0xFEFF; DWORD dw = 0;
-        WriteFile(hFile, &wBOM, sizeof(wBOM), &dw, nullptr);
+        WCHAR wszDir[MAX_PATH_WGCP] = {};
+        StringCchCopyW(wszDir, MAX_PATH_WGCP, wszPath);
+        WCHAR* pSlash = wcsrchr(wszDir, L'\\');
+        if (pSlash)
+        {
+            *pSlash = L'\0';
+            DWORD dwDirErr = SHCreateDirectoryExW(nullptr, wszDir, nullptr);
+            if (dwDirErr != ERROR_SUCCESS && dwDirErr != ERROR_ALREADY_EXISTS)
+            {
+                SYSTEMTIME stTmp = {}; GetLocalTime(&stTmp);
+                StringCchPrintfW(wszPath, MAX_PATH_WGCP,
+                    WGCPIsTraySuffix() ? L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log"
+                                       : L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log",
+                    stTmp.wDay, stTmp.wMonth, stTmp.wYear);
+            }
+        }
     }
 
-    // Format log line
+    // Open or create log file
+    HANDLE hFile = CreateFileW(wszPath, FILE_APPEND_DATA,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        // Fallback: C:\Windows\Temp (always writable, even as SYSTEM)
+        SYSTEMTIME stFb = {}; GetLocalTime(&stFb);
+        StringCchPrintfW(wszPath, MAX_PATH_WGCP,
+            WGCPIsTraySuffix() ? L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log"
+                               : L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log",
+            stFb.wDay, stFb.wMonth, stFb.wYear);
+        hFile = CreateFileW(wszPath, FILE_APPEND_DATA,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE,
+                            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hFile == INVALID_HANDLE_VALUE) return;
+    }
+
+    // Format log line as UTF-8
     PCWSTR pwszLvl = (dwLevel==WGCP_LOG_CRIT)?L"[CRIT] "
                    : (dwLevel==WGCP_LOG_WARN)?L"[WARN] ":L"[DEBUG]";
     SYSTEMTIME st = {}; GetLocalTime(&st);
@@ -347,9 +381,11 @@ inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
                      st.wYear, st.wMonth, st.wDay,
                      st.wHour, st.wMinute, st.wSecond,
                      pwszLvl, pwszMsg);
+    // Convert to UTF-8 for writing
+    char szLine[4096] = {};
+    WideCharToMultiByte(CP_UTF8, 0, wszLine, -1, szLine, sizeof(szLine), nullptr, nullptr);
     DWORD dw = 0;
-    WriteFile(hFile, wszLine,
-              static_cast<DWORD>(wcslen(wszLine) * sizeof(WCHAR)), &dw, nullptr);
+    WriteFile(hFile, szLine, lstrlenA(szLine), &dw, nullptr);
     CloseHandle(hFile);
 
     // Log rotation (only on CRIT/WARN to avoid performance impact)
@@ -670,7 +706,15 @@ inline void WGCPLoadSmartcardConfig(WGCPSmartcardConfig& cfg)
     cfg.bConnectOnInsert    = ReadRegDword(hKey, WGCP_REG_SC_CONNECT_ON_INSERT, WGCP_DEFAULT_SC_CONNECT_ON_INSERT) != 0;
     cfg.bDisconnectOnRemove = ReadRegDword(hKey, WGCP_REG_SC_DISCONNECT_ON_REMOVE, WGCP_DEFAULT_SC_DISCONNECT_ON_REMOVE) != 0;
     ReadRegString(hKey, WGCP_REG_SC_READER_NAME,     cfg.wszReaderName,     256, L"");
-    ReadRegString(hKey, WGCP_REG_SC_CERT_THUMBPRINT, cfg.wszCertThumbprint, 128, L"");
+    // Read thumbprint as plain REG_SZ.
+    // Note: The thumbprint is not a secret - it only identifies which certificate
+    // is accepted. DPAPI LocalMachine encryption cannot be used here because the
+    // CP runs as SYSTEM on the pre-logon screen and SYSTEM cannot decrypt blobs
+    // created by an interactive user session.
+    ReadRegString(hKey, WGCP_REG_SC_CERT_THUMBPRINT,
+                  cfg.wszCertThumbprint, 128, L"");
+    if (cfg.wszCertThumbprint[0])
+        LOG_DEBUG(L"SC-Config: thumbprint loaded from registry");
 
     RegCloseKey(hKey);
 
@@ -689,7 +733,6 @@ inline void WGCPLoadSmartcardConfig(WGCPSmartcardConfig& cfg)
 // Smartcard / WinSCard helper functions
 // ---------------------------------------------------------------------------
 #include <winscard.h>
-#include <wincrypt.h>
 #pragma comment(lib, "winscard.lib")
 #pragma comment(lib, "crypt32.lib")
 
@@ -893,10 +936,159 @@ inline bool WGCPVerifyCertThumbprint(SCARDHANDLE hCard, PCWSTR pwszExpected)
         return false;
     };
 
-    // Search Current User MY store first (YubiKey Minidriver publishes here)
-    bool bMatch = SearchStore(CERT_SYSTEM_STORE_CURRENT_USER, L"MY");
+    // 1. Read certificate directly from PIV slot 9a via GET DATA APDU.
+    //    Works in pre-logon (SYSTEM) and post-logon without depending on
+    //    any Windows certificate store or user context.
+    bool bMatch = false;
+    {
+        // PIV GET DATA for Certificate in slot 9a (no Le - use GET RESPONSE chaining)
+        BYTE apduGetCert[] = {
+            0x00, 0xCB, 0x3F, 0xFF, 0x05,
+            0x5C, 0x03, 0x5F, 0xC1, 0x05
+        };
+        BYTE   certBuf[8192] = {};
+        DWORD  dwCertRecv    = 0;
+        // YubiKey always uses T=1 protocol
+        const SCARD_IO_REQUEST* pPci = SCARD_PCI_T1;
 
-    // Fallback: Local Machine MY store (machine-scoped certificates)
+        // SELECT PIV Application first (required before any PIV data command)
+        BYTE selectAid[] = {
+            0x00, 0xA4, 0x04, 0x00, 0x0B,
+            0xA0, 0x00, 0x00, 0x03, 0x08, 0x00, 0x00, 0x10, 0x00, 0x01, 0x00
+        };
+        BYTE  selResp[512] = {}; DWORD dwSelRecv = sizeof(selResp);
+        SCardTransmit(hCard, pPci, selectAid, sizeof(selectAid),
+                      nullptr, selResp, &dwSelRecv);
+
+        // GET DATA with GET RESPONSE chaining for large responses (SW=61xx)
+        LONG lGet = SCARD_F_INTERNAL_ERROR;
+        for (int iTry = 0; iTry < 3; iTry++)
+        {
+            ZeroMemory(certBuf, sizeof(certBuf));
+            dwCertRecv = 0;
+            BYTE tmpBuf[512] = {};
+            DWORD dwTmp = sizeof(tmpBuf);
+            lGet = SCardTransmit(hCard, pPci, apduGetCert, sizeof(apduGetCert),
+                                 nullptr, tmpBuf, &dwTmp);
+            if (lGet != SCARD_S_SUCCESS) { Sleep(100); continue; }
+
+            // Copy data bytes (exclude trailing SW1 SW2)
+            DWORD dwData = (dwTmp >= 2) ? dwTmp - 2 : 0;
+            if (dwData > 0 && dwData <= sizeof(certBuf))
+                memcpy(certBuf, tmpBuf, dwData);
+            dwCertRecv = dwData;
+
+            // Chain: SW=61xx means more data available - send GET RESPONSE
+            while (dwTmp >= 2 && tmpBuf[dwTmp-2] == 0x61)
+            {
+                BYTE remaining = tmpBuf[dwTmp-1];
+                BYTE apduGetResp[] = { 0x00, 0xC0, 0x00, 0x00, remaining };
+                ZeroMemory(tmpBuf, sizeof(tmpBuf));
+                dwTmp = sizeof(tmpBuf);
+                lGet = SCardTransmit(hCard, pPci, apduGetResp, sizeof(apduGetResp),
+                                     nullptr, tmpBuf, &dwTmp);
+                if (lGet != SCARD_S_SUCCESS) break;
+                dwData = (dwTmp >= 2) ? dwTmp - 2 : 0;
+                if (dwCertRecv + dwData <= sizeof(certBuf))
+                {
+                    memcpy(certBuf + dwCertRecv, tmpBuf, dwData);
+                    dwCertRecv += dwData;
+                }
+            }
+            break;
+        }
+        // Log GET DATA result
+        {
+            SYSTEMTIME stG={}; GetLocalTime(&stG);
+            WCHAR wLG[MAX_PATH]={};
+            StringCchPrintfW(wLG,MAX_PATH,L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log",
+                stG.wDay,stG.wMonth,stG.wYear);
+            HANDLE hLG=CreateFileW(wLG,FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,
+                nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
+            if(hLG!=INVALID_HANDLE_VALUE){
+                char szG[128]={};
+                wsprintfA(szG,"[%02d:%02d:%02d] SC: GET_DATA lRet=0x%08X recv=%lu b0=%02X b1=%02X b2=%02X b3=%02X b4=%02X\r\n",
+                    stG.wHour,stG.wMinute,stG.wSecond,(unsigned)lGet,(unsigned long)dwCertRecv,
+                    dwCertRecv>0?certBuf[0]:0, dwCertRecv>1?certBuf[1]:0,
+                    dwCertRecv>2?certBuf[2]:0, dwCertRecv>3?certBuf[3]:0,
+                    dwCertRecv>4?certBuf[4]:0);
+                DWORD dw=0; WriteFile(hLG,szG,lstrlenA(szG),&dw,nullptr);
+                CloseHandle(hLG);
+            }
+        }
+        if (lGet == SCARD_S_SUCCESS && dwCertRecv > 4)
+        {
+            // Response contains DER-encoded certificate (after TLV header)
+            // Find the certificate DER data: look for 0x70 tag
+            BYTE* pDer = certBuf;
+            DWORD cbDer = dwCertRecv - 2; // strip SW bytes
+
+            // Skip outer TLV (0x53 tag)
+            if (cbDer > 4 && pDer[0] == 0x53)
+            {
+                DWORD skip = 2;
+                if (pDer[1] & 0x80) skip += (pDer[1] & 0x7F);
+                pDer += skip; cbDer -= skip;
+            }
+            // Skip 0x70 certificate tag
+            if (cbDer > 4 && pDer[0] == 0x70)
+            {
+                DWORD len = 0;
+                DWORD skip = 2;
+                if (pDer[1] & 0x80)
+                {
+                    DWORD nb = pDer[1] & 0x7F;
+                    for (DWORD i = 0; i < nb; i++)
+                        len = (len << 8) | pDer[2 + i];
+                    skip = 2 + nb;
+                }
+                else len = pDer[1];
+                pDer += skip; cbDer = len;
+            }
+
+            if (cbDer > 0)
+            {
+                PCCERT_CONTEXT pCtx = CertCreateCertificateContext(
+                    X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, pDer, cbDer);
+                if (pCtx)
+                {
+                    BYTE  rgThumb[20] = {};
+                    DWORD cbThumb     = sizeof(rgThumb);
+                    if (CertGetCertificateContextProperty(
+                            pCtx, CERT_SHA1_HASH_PROP_ID, rgThumb, &cbThumb))
+                    {
+                        WCHAR wszThumb[48] = {};
+                        for (DWORD i = 0; i < cbThumb; i++)
+                            StringCchPrintfW(wszThumb + i*2, 3, L"%02X", rgThumb[i]);
+                        bMatch = (_wcsicmp(wszThumb, pwszExpected) == 0);
+                        if (bMatch)
+                            LOG_DEBUG(L"SC: Thumbprint matched via PIV GET DATA");
+                        else
+                        {
+                            WCHAR eT[160] = {};
+                            StringCchPrintfW(eT, 160,
+                                L"SC: PIV cert thumbprint=%s expected=%s",
+                                wszThumb, pwszExpected);
+                            LOG_WARN(eT);
+                        }
+                    }
+                    CertFreeCertificateContext(pCtx);
+                }
+            }
+        }
+        else
+        {
+            WCHAR eG[64] = {};
+            StringCchPrintfW(eG, 64, L"SC: GET DATA failed lRet=0x%08X", lGet);
+            LOG_WARN(eG);
+        }
+    }
+
+    // 2. Fallback: Current User MY store (post-logon, YubiKey Minidriver)
+    if (!bMatch)
+        bMatch = SearchStore(CERT_SYSTEM_STORE_CURRENT_USER, L"MY");
+
+    // 3. Fallback: Local Machine MY store
     if (!bMatch)
         bMatch = SearchStore(CERT_SYSTEM_STORE_LOCAL_MACHINE, L"MY");
 
@@ -954,7 +1146,6 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
         return WGCPScResult::Error;
     }
 
-    // Verify thumbprint
     if (!WGCPVerifyCertThumbprint(hCard, cfg.wszCertThumbprint))
     {
         SCardDisconnect(hCard, SCARD_LEAVE_CARD);

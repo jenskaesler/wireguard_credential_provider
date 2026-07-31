@@ -23,15 +23,34 @@ STDMETHODIMP_(ULONG) WireGuardProvider::Release()
 {
     LONG c = InterlockedDecrement(&_cRef); if (!c) delete this; return c;
 }
+static void ProvLog(const char* msg)
+{
+    SYSTEMTIME st = {}; GetLocalTime(&st);
+    WCHAR wszLog[MAX_PATH] = {};
+    StringCchPrintfW(wszLog, MAX_PATH,
+        L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log", st.wDay, st.wMonth, st.wYear);
+    HANDLE hF = CreateFileW(wszLog, FILE_APPEND_DATA, FILE_SHARE_READ|FILE_SHARE_WRITE,
+        nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hF != INVALID_HANDLE_VALUE) {
+        char szLine[256]={};
+        wsprintfA(szLine,"[%02d:%02d:%02d] %s\r\n",st.wHour,st.wMinute,st.wSecond,msg);
+        DWORD dw=0; WriteFile(hF,szLine,lstrlenA(szLine),&dw,nullptr);
+        CloseHandle(hF);
+    }
+}
+
 STDMETHODIMP WireGuardProvider::SetUsageScenario(
     CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, DWORD)
 {
+    LOG_DEBUG(L"CP: SetUsageScenario called");
     switch (cpus)
     {
     case CPUS_LOGON:
     case CPUS_UNLOCK_WORKSTATION:
+        LOG_DEBUG(L"CP: Usage scenario accepted (LOGON/UNLOCK)");
         _cpus=cpus; _bRecreateEnumeratedCredentials=true; return S_OK;
     default:
+        LOG_DEBUG(L"CP: Usage scenario rejected");
         return E_NOTIMPL;
     }
 }
@@ -74,11 +93,14 @@ STDMETHODIMP WireGuardProvider::GetFieldDescriptorAt(
 STDMETHODIMP WireGuardProvider::GetCredentialCount(
     DWORD* pdwCount, DWORD* pdwDefault, BOOL* pbAutoLogonWithDefault)
 {
+    LOG_DEBUG(L"CP: GetCredentialCount called");
     if (_bRecreateEnumeratedCredentials)
         { _bRecreateEnumeratedCredentials=false; _EnumerateCredentials(); }
     *pdwCount=1; *pdwDefault=CREDENTIAL_PROVIDER_NO_DEFAULT;
-    *pbAutoLogonWithDefault=FALSE; return S_OK;
+    *pbAutoLogonWithDefault=FALSE;
+    return S_OK;
 }
+
 
 STDMETHODIMP WireGuardProvider::GetCredentialAt(
     DWORD dwIndex, ICredentialProviderCredential** ppcpc)
@@ -103,7 +125,7 @@ HRESULT WireGuardProvider::_EnumerateCredentials()
 HRESULT WireGuardProvider_CreateInstance(REFIID riid, void** ppv)
 {
     WireGuardProvider* p=new(std::nothrow) WireGuardProvider();
-    if (!p) return E_OUTOFMEMORY;
+    if (!p) { LOG_DEBUG(L"CP: CreateInstance OOM"); return E_OUTOFMEMORY; }
     HRESULT hr=p->QueryInterface(riid,ppv);
     p->Release();
     return hr;

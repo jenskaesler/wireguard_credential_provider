@@ -7,6 +7,56 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.7.31] – 2026-07-31
+
+### Added
+- **Pre-Logon YubiKey PIV authentication** fully functional
+  - PIN entry field directly in the credential tile (`CPFT_PASSWORD_TEXT`, masked)
+  - PIN extracted via `CredUnPackAuthenticationBufferW` in `GetSerialization`
+  - Certificate read from YubiKey via PIV GET DATA APDU with GET RESPONSE chaining
+  - RSA2048 certificates (>256 bytes) now fully retrieved via `SW=61xx` chaining
+  - SELECT PIV AID sent before GET DATA (required for UICC/NFC context)
+  - Separate CP log file: `C:\Windows\Temp\wgcp_ddMMyyyy_cp.log`
+  - Log directory fallback to `C:\Windows\Temp` when SYSTEM cannot write to INSTDIR
+- **`installer\Setup-YubiKey.ps1`** – interactive YubiKey PIV setup tool
+  - Menu: Initialize / Register existing YubiKey / Export report
+  - Full PIV reset, random 8-digit PIN/PUK, RSA2048 key + self-signed cert (10y)
+  - AD Distinguished Name lookup (`Get-ADUser`) with manual fallback
+  - Writes `SmartcardEnabled=1` and `SmartcardCertThumbprint` to registry
+  - Setup report (PIN/PUK/thumbprint) saved to user-defined path
+
+### Changed
+- All user-facing "Smartcard" labels replaced with "YubiKey" (pre-logon tile and tray)
+  - `Wrong smartcard` → `Wrong YubiKey`
+  - `Smartcard detected` → `YubiKey detected`
+  - `Please insert YubiKey / smartcard...` → `Please insert your YubiKey...`
+  - `Smartcard Authentication` → `YubiKey Authentication`
+- PIN field in pre-logon tile: shown when disconnected, hidden when connected
+- `GetSerialization` triggers `CommandLinkClicked` when user presses Enter
+- SC-Watch thread: detects card present at startup, updates status on every tick
+- Log encoding changed from UTF-16LE to UTF-8 (no BOM, readable with standard tools)
+- Default log level changed back to CRIT (1) – DEBUG only when explicitly configured
+- Version bumped to 2026.7.31 in all RC files
+
+### Fixed
+- Pre-logon PIN was never received (`CPFT_PASSWORD_TEXT` does not call `SetStringValue`)
+  → Fixed via `CredUnPackAuthenticationBufferW` in `GetSerialization`
+- YubiKey RSA2048 certificate truncated at 258 bytes (standard APDU limit)
+  → Fixed via GET RESPONSE chaining (`00 C0 00 00 Le`) for `SW=61xx` responses
+- `SHCreateDirectoryExW` failure silently prevented all CP logging as SYSTEM
+  → Fixed: error checked, falls back to `C:\Windows\Temp`
+- CP and Tray wrote to same log file in `C:\Windows\Temp`
+  → Fixed: CP uses `_cp.log` suffix, detected via `GetModuleFileNameW`
+- `CERT_STORE_PROV_SMARTCARD` not available in modern SDK
+  → Replaced with direct PIV GET DATA APDU
+- `SCardFreeMemory(nullptr)` compilation error
+  → Removed unnecessary reader status call
+- Leftover `CredLog` call causing compilation error after debug cleanup
+
+
+---
+
+
 ## [2026.7.30] – 2026-07-30
 
 ### Added
