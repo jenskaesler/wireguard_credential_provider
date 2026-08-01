@@ -296,7 +296,7 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
         File "content\WireGuardCredentialProvider.dll"
         File "content\WireGuardShutdownService.exe"
         File "content\WireGuardCPTray.exe"
-        File "content\configure.reg"
+        ; configure.reg removed - all registry keys are written directly by this installer
         File "content\img\icon.ico"
 
         SetOutPath "$INSTDIR\docs"
@@ -438,6 +438,13 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
         WriteRegStr HKLM "${REG_WGCP}" "WgExePath" "$PROGRAMFILES64\WireGuard\wg.exe"
         WriteRegStr HKLM "${REG_WGCP}" "ConfigDir" "$PROGRAMFILES64\WireGuard\Data\Configurations\"
 
+        ; Neue Keys seit letztem Release - immer prüfen und ggf. anlegen
+        ClearErrors
+        ReadRegDWORD $R0 HKLM "${REG_WGCP}" "HandshakeTimeoutSec"
+        ${If} $R0 == ""
+            WriteRegDWORD HKLM "${REG_WGCP}" "HandshakeTimeoutSec" 0
+        ${EndIf}
+
         ; Weitere Werte nur beim Erstinstall (Benutzereinstellungen erhalten)
         ClearErrors
         ReadRegStr $R0 HKLM "${REG_WGCP}" "TileLabel"
@@ -458,6 +465,7 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
             WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardDisconnectOnRemove" 0
             WriteRegStr   HKLM "${REG_WGCP}" "SmartcardReaderName"         ""
             WriteRegStr   HKLM "${REG_WGCP}" "SmartcardCertThumbprint"     ""
+            WriteRegDWORD HKLM "${REG_WGCP}" "HandshakeTimeoutSec"         0
             DetailPrint "Standard-Konfiguration geschrieben."
         ${Else}
             DetailPrint "Bestehende Konfiguration beibehalten."

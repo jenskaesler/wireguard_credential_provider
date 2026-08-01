@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <assemblyIdentity
-    version="2026.7.6.0"
+    version="2026.8.1.0"
     processorArchitecture="amd64"
     name="JensKaesler.WireGuardCPTray"
     type="win32"
@@ -31,11 +31,11 @@
     </windowsSettings>
   </application>
 
-  <!-- Requested execution level: standard user -->
+  <!-- Require administrator: needed for WireGuard config access and YubiKey PIV -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges>
-        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
       </requestedPrivileges>
     </security>
   </trustInfo>

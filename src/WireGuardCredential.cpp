@@ -18,6 +18,7 @@ WireGuardCredential::WireGuardCredential()
     ZeroMemory(_rgProfiles,                 sizeof(_rgProfiles));
     ZeroMemory(_wszExePath,                 sizeof(_wszExePath));
     ZeroMemory(_wszWgExePath,               sizeof(_wszWgExePath));
+    _dwHandshakeTimeoutSec = 0;
     ZeroMemory(_wszIconConn,                sizeof(_wszIconConn));
     ZeroMemory(_wszIconDisconn,             sizeof(_wszIconDisconn));
     ZeroMemory(_wszStatus,                  sizeof(_wszStatus));
@@ -134,6 +135,7 @@ void WireGuardCredential::_LoadConfig()
         ReadRegString(hKey, WGCP_REG_WGEXEPATH,   _wszWgExePath,   MAX_PATH_WGCP, WGCP_DEFAULT_WGEXEPATH);
         ReadRegString(hKey, WGCP_REG_ICONCONN,    _wszIconConn,    MAX_PATH_WGCP, WGCP_DEFAULT_ICONCONN);
         ReadRegString(hKey, WGCP_REG_ICONDISCONN, _wszIconDisconn, MAX_PATH_WGCP, WGCP_DEFAULT_ICONDISCONN);
+        _dwHandshakeTimeoutSec = ReadRegDword(hKey, WGCP_REG_HANDSHAKE_TIMEOUT_SEC, 0);
         RegCloseKey(hKey);
         LOG_DEBUG(L"Registry config loaded");
     }
@@ -738,6 +740,22 @@ DWORD WINAPI WireGuardCredential::_ScWatchThreadProc(LPVOID lpParam)
             }
         }
 
+        // Handshake timeout: disconnect if last handshake is too old
+        if (pThis->_bConnected && pThis->_dwHandshakeTimeoutSec > 0)
+        {
+            PCWSTR pwszProf = pThis->_rgProfiles[pThis->_dwSelectedProfile];
+            LONGLONG llAge = WGGetLastHandshakeSec(pThis->_wszWgExePath, pwszProf);
+            if (llAge > static_cast<LONGLONG>(pThis->_dwHandshakeTimeoutSec))
+            {
+                WCHAR d[128] = {};
+                StringCchPrintfW(d, 128,
+                    L"Handshake timeout: last handshake %lld s ago (limit %lu s) - disconnecting tunnel",
+                    llAge, pThis->_dwHandshakeTimeoutSec);
+                LOG_CRIT(d);
+                WGDisconnect(pThis->_wszExePath, pwszProf);
+            }
+        }
+
         // Update status text on every tick when card is present
         // (handles case where _bConnected changes while card stays inserted)
         if (bCardNow)
@@ -785,6 +803,16 @@ if (dwFieldID != FI_BUTTON || _nProfiles == 0) return S_OK;
     }
     else
     {
+        // Block VPN connect when already on the corporate network
+        if (WGCPIsOnCorporateNetwork())
+        {
+            LOG_DEBUG(L"CLC: Corporate network detected - connect blocked");
+            _UpdateScStatus(
+                L"\U0001F3E2 Corporate network \u2013 VPN not needed");
+            _UpdateFields();
+            return S_OK;
+        }
+
         // Smartcard authentication if enabled
         if (_scConfig.bEnabled)
         {

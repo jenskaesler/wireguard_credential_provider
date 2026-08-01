@@ -22,8 +22,8 @@ IDI_TRAY_CONNECTED    ICON  "wireguard_tray_connected.ico"
 IDI_TRAY_DISCONNECTED ICON  "wireguard_tray_disconnected.ico"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     2026,7,31,0
-PRODUCTVERSION  2026,7,31,0
+FILEVERSION     2026,8,1,0
+PRODUCTVERSION  2026,8,1,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          0x40004L
@@ -36,12 +36,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "Jens Kaesler"
             VALUE "FileDescription",  "WireGuard Credential Provider - Tray Application"
-            VALUE "FileVersion",      "2026.7.31"
+            VALUE "FileVersion",      "2026.8.1"
             VALUE "InternalName",     "WireGuardCPTray"
             VALUE "LegalCopyright",   "MIT License"
             VALUE "OriginalFilename", "WireGuardCPTray.exe"
             VALUE "ProductName",      "WireGuard Credential Provider"
-            VALUE "ProductVersion",   "2026.7.31"
+            VALUE "ProductVersion",   "2026.8.1"
         END
     END
     BLOCK "VarFileInfo"

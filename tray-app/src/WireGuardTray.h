@@ -67,6 +67,8 @@
 #define IDM_PROFILE_BASE    300     // 300..363 for up to MAX_PROFILES profiles
 #define IDM_IMPORT          401
 #define IDM_OPEN_CONFIG_DIR 402
+#define IDM_DELETE_PROFILE  403
+#define IDM_OPEN_YKMANAGER  404
 #define IDM_EXIT            400
 
 #define WGCP_TRAY_CLASS     L"WireGuardCPTrayClass"
@@ -100,6 +102,7 @@ private:
 
     WCHAR               _wszExePath[MAX_PATH_WGCP];
     WCHAR               _wszWgExePath[MAX_PATH_WGCP];
+    DWORD               _dwHandshakeTimeoutSec; // 0 = disabled
     WGCPSmartcardConfig _scConfig;
 
     WCHAR               _rgProfiles[MAX_PROFILES][MAX_PATH_WGCP];
@@ -126,6 +129,9 @@ private:
     void _RemoveTrayIcon();
     void _UpdateTrayTooltip();
     void _ImportProfile();
+    void _DeleteProfile();
+    void _OpenYubiKeyManager();
+    WCHAR _wszYkMgrPath[MAX_PATH];  // path found during menu build
     void _OpenConfigDir();
     void _CheckAndRemoveWireGuardShortcut();
 
@@ -142,6 +148,13 @@ private:
     static DWORD WINAPI _SmartcardWatchThread(LPVOID lpParam);
     HANDLE _hScWatchThread;
     HANDLE _hScWatchStop;
+
+    // Corporate network watcher (auto-disconnect when on corp network)
+    void _StartNetworkWatcher();
+    void _StopNetworkWatcher();
+    static DWORD WINAPI _NetworkWatchThread(LPVOID lpParam);
+    HANDLE _hNetWatchThread;
+    HANDLE _hNetWatchStop;
 
     void _Log(DWORD level, PCWSTR msg)
     {

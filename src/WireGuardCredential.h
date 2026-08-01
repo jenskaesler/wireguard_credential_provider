@@ -89,6 +89,7 @@ private:
     // Configuration paths
     WCHAR   _wszExePath[MAX_PATH_WGCP];
     WCHAR   _wszWgExePath[MAX_PATH_WGCP];
+    DWORD   _dwHandshakeTimeoutSec;    // 0 = disabled
     WCHAR   _wszIconConn[MAX_PATH_WGCP];
     WCHAR   _wszIconDisconn[MAX_PATH_WGCP];
 

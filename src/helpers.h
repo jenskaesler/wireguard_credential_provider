@@ -17,7 +17,9 @@
 #include <strsafe.h>
 #include <winsvc.h>
 #include <wincrypt.h>
-#include <wincred.h>   // CredUIPromptForCredentialsW  // DATA_BLOB, CryptProtectData, CryptUnprotectData
+#include <wincred.h>   // CredUIPromptForCredentialsW
+#include <netlistmgr.h> // INetworkListManager (NLA)
+#include <comdef.h>     // _com_ptr_t  // DATA_BLOB, CryptProtectData, CryptUnprotectData
 #include <dpapi.h>     // CRYPTPROTECT_LOCAL_MACHINE
 
 #pragma comment(lib, "advapi32.lib")
@@ -31,6 +33,8 @@
   #include "../resources/resource.h"
   #pragma comment(lib, "shlwapi.lib")
   #pragma comment(lib, "credui.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "oleaut32.lib")
   #pragma comment(lib, "shell32.lib")
   #ifndef CPFIS_INTERACTIVE
   #define CPFIS_INTERACTIVE  ((CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE)1)
@@ -55,7 +59,8 @@
 // ---------------------------------------------------------------------------
 #define WGCP_REG_KEY          L"SOFTWARE\\Jens Kaesler\\WireGuard Credential Provider"
 #define WGCP_REG_EXEPATH      L"ExePath"
-#define WGCP_REG_WGEXEPATH    L"WgExePath"
+#define WGCP_REG_WGEXEPATH              L"WgExePath"
+#define WGCP_REG_HANDSHAKE_TIMEOUT_SEC  L"HandshakeTimeoutSec"
 #define WGCP_REG_LABEL        L"TileLabel"
 #define WGCP_REG_ICONCONN     L"IconConnected"
 #define WGCP_REG_ICONDISCONN  L"IconDisconnected"
@@ -123,6 +128,61 @@ struct FIELD_STATE_PAIR
 #endif // WGCP_TRAY_BUILD
 
 // ---------------------------------------------------------------------------
+// Network Location Awareness
+// Returns true when the machine has an active domain-authenticated network
+// connection – i.e. it is physically inside the corporate network.
+// Uses INetworkListManager (NLA) which is available from Vista onwards.
+// ---------------------------------------------------------------------------
+inline bool WGCPIsOnCorporateNetwork()
+{
+    // Initialize COM (safe to call multiple times)
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    bool bCoInit = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
+
+    bool bCorporate = false;
+    INetworkListManager* pNLM = nullptr;
+    hr = CoCreateInstance(CLSID_NetworkListManager, nullptr,
+                          CLSCTX_ALL, IID_INetworkListManager,
+                          reinterpret_cast<void**>(&pNLM));
+    if (SUCCEEDED(hr) && pNLM)
+    {
+        // Enumerate all connected networks
+        IEnumNetworks* pEnum = nullptr;
+        if (SUCCEEDED(pNLM->GetNetworks(NLM_ENUM_NETWORK_CONNECTED, &pEnum)) && pEnum)
+        {
+            INetwork* pNet = nullptr;
+            while (pEnum->Next(1, &pNet, nullptr) == S_OK)
+            {
+                NLM_CONNECTIVITY connectivity = NLM_CONNECTIVITY_DISCONNECTED;
+                if (SUCCEEDED(pNet->GetConnectivity(&connectivity)))
+                {
+                    // Domain-authenticated = physically in corporate network
+                    if (connectivity & NLM_CONNECTIVITY_IPV4_INTERNET ||
+                        connectivity & NLM_CONNECTIVITY_IPV6_INTERNET)
+                    {
+                        // Check if domain-authenticated
+                        NLM_NETWORK_CATEGORY cat = NLM_NETWORK_CATEGORY_PUBLIC;
+                        if (SUCCEEDED(pNet->GetCategory(&cat)) &&
+                            cat == NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED)
+                        {
+                            bCorporate = true;
+                            pNet->Release();
+                            break;
+                        }
+                    }
+                }
+                pNet->Release();
+            }
+            pEnum->Release();
+        }
+        pNLM->Release();
+    }
+
+    if (bCoInit && SUCCEEDED(hr)) CoUninitialize();
+    return bCorporate;
+}
+
+// ---------------------------------------------------------------------------
 // Registry helpers
 // ---------------------------------------------------------------------------
 inline void ReadRegString(HKEY hKey, PCWSTR pwszValue,
@@ -186,14 +246,6 @@ inline void WGGetConfigDir(WCHAR* pwszOut, DWORD cchOut)
 //              Filename may contain ddMMyyyy -> will be substituted
 // Example: %INSTALLDIR%\logs\wgcp_ddMMyyyy.log
 
-// Returns true if running in the tray app (post-logon) vs CP DLL (pre-logon/SYSTEM)
-static inline bool WGCPIsTraySuffix()
-{
-    WCHAR wszExe[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, wszExe, MAX_PATH);
-    return (wcsstr(wszExe, L"Tray") != nullptr || wcsstr(wszExe, L"tray") != nullptr);
-}
-
 // ---------------------------------------------------------------------------
 inline void WGCPResolvLogPath(WCHAR* pwszOut, DWORD cchOut)
 {
@@ -221,8 +273,7 @@ inline void WGCPResolvLogPath(WCHAR* pwszOut, DWORD cchOut)
         else
         {
             StringCchPrintfW(pwszOut, cchOut,
-                             WGCPIsTraySuffix() ? L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log"
-                                            : L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log",
+                             L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log",
                              st.wDay, st.wMonth, st.wYear);
         }
         return;
@@ -346,8 +397,7 @@ inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
             {
                 SYSTEMTIME stTmp = {}; GetLocalTime(&stTmp);
                 StringCchPrintfW(wszPath, MAX_PATH_WGCP,
-                    WGCPIsTraySuffix() ? L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log"
-                                       : L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log",
+                    L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log",
                     stTmp.wDay, stTmp.wMonth, stTmp.wYear);
             }
         }
@@ -362,8 +412,7 @@ inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
         // Fallback: C:\Windows\Temp (always writable, even as SYSTEM)
         SYSTEMTIME stFb = {}; GetLocalTime(&stFb);
         StringCchPrintfW(wszPath, MAX_PATH_WGCP,
-            WGCPIsTraySuffix() ? L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log"
-                               : L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log",
+            L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log",
             stFb.wDay, stFb.wMonth, stFb.wYear);
         hFile = CreateFileW(wszPath, FILE_APPEND_DATA,
                             FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -615,14 +664,15 @@ inline void WGGetTrafficStats(PCWSTR pwszWgExe, PCWSTR pwszProfile,
 
     long long tx = _atoi64(tab1), rx = _atoi64(tab2);
     auto fmtBytes = [](long long b, WCHAR* out, DWORD cch) {
-        if      (b >= 1024LL*1024*1024) StringCchPrintfW(out, cch, L"%.1f GB", b/1073741824.0);
-        else if (b >= 1024*1024)        StringCchPrintfW(out, cch, L"%.1f MB", b/1048576.0);
-        else if (b >= 1024)             StringCchPrintfW(out, cch, L"%.1f KB", b/1024.0);
-        else                            StringCchPrintfW(out, cch, L"%lld B",  b);
+        if      (b >= 1024LL*1024*1024) StringCchPrintfW(out, cch, L"%.1fG", b/1073741824.0);
+        else if (b >= 1024*1024)        StringCchPrintfW(out, cch, L"%.1fM", b/1048576.0);
+        else if (b >= 1024)             StringCchPrintfW(out, cch, L"%.1fK", b/1024.0);
+        else                            StringCchPrintfW(out, cch, L"%lldB",  b);
     };
-    WCHAR wszTx[32] = {}, wszRx[32] = {};
-    fmtBytes(tx, wszTx, 32); fmtBytes(rx, wszRx, 32);
-    StringCchPrintfW(pwszOut, cchOut, L"\u2191 %s   \u2193 %s", wszTx, wszRx);
+    WCHAR wszTx[16] = {}, wszRx[16] = {};
+    fmtBytes(tx, wszTx, 16); fmtBytes(rx, wszRx, 16);
+    // Compact format to fit Windows tooltip 128-char limit
+    StringCchPrintfW(pwszOut, cchOut, L"\u2191%s  \u2193%s", wszTx, wszRx);
 }
 
 // ---------------------------------------------------------------------------
@@ -665,6 +715,72 @@ inline void WGGetConnectedSince(PCWSTR pwszProfile, WCHAR* pwszOut, DWORD cchOut
         StringCchPrintfW(pwszOut, cchOut, L"%s %02d:%02d:%02d", pwszLabel, h, m, s);
     }
     CloseHandle(hProc);
+}
+
+// ---------------------------------------------------------------------------
+// WGGetLastHandshakeSec
+// Returns seconds since the last WireGuard handshake for the given profile.
+// Returns -1 if the tunnel is not connected, wg.exe is unavailable, or
+// no handshake has occurred yet.
+// ---------------------------------------------------------------------------
+inline LONGLONG WGGetLastHandshakeSec(PCWSTR pwszWgExe, PCWSTR pwszProfile)
+{
+    if (!pwszWgExe || !pwszWgExe[0] || !pwszProfile || !pwszProfile[0])
+        return -1;
+
+    // Run: wg show <profile> latest-handshakes via stdout pipe
+    WCHAR wszCmd[MAX_PATH_WGCP * 2] = {};
+    StringCchPrintfW(wszCmd, ARRAYSIZE(wszCmd),
+        L"\"%s\" show \"%s\" latest-handshakes", pwszWgExe, pwszProfile);
+
+    WCHAR wszTmp[MAX_PATH] = {}, wszTmpFile[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, wszTmp);
+    StringCchPrintfW(wszTmpFile, MAX_PATH, L"%swgcp_hs.txt", wszTmp);
+
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
+    HANDLE hOut = CreateFileW(wszTmpFile, GENERIC_WRITE, 0, &sa,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hOut == INVALID_HANDLE_VALUE) return -1;
+
+    STARTUPINFOW si = { sizeof(si) };
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdOutput = hOut;
+    si.hStdError  = GetStdHandle(STD_ERROR_HANDLE);
+    si.hStdInput  = GetStdHandle(STD_INPUT_HANDLE);
+    PROCESS_INFORMATION pi = {};
+    BOOL bOk = CreateProcessW(nullptr, wszCmd, nullptr, nullptr,
+                               TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    CloseHandle(hOut);
+    if (!bOk) { DeleteFileW(wszTmpFile); return -1; }
+    WaitForSingleObject(pi.hProcess, 3000);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+
+    HANDLE hF = CreateFileW(wszTmpFile, GENERIC_READ, FILE_SHARE_READ,
+                             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hF == INVALID_HANDLE_VALUE) { DeleteFileW(wszTmpFile); return -1; }
+    char szBuf[512] = {};
+    DWORD dwRead = 0;
+    ReadFile(hF, szBuf, sizeof(szBuf) - 1, &dwRead, nullptr);
+    CloseHandle(hF);
+    DeleteFileW(wszTmpFile);
+
+    if (dwRead == 0) return -1;
+
+    // Parse: "<pubkey>\t<unix_timestamp>\n"
+    // Find the tab, then parse the timestamp
+    char* pTab = strchr(szBuf, '\t');
+    if (!pTab) return -1;
+    LONGLONG llTimestamp = _atoi64(pTab + 1);
+    if (llTimestamp <= 0) return -1; // 0 = no handshake yet
+
+    // Current Unix time
+    FILETIME ftNow = {}; GetSystemTimeAsFileTime(&ftNow);
+    ULARGE_INTEGER uli;
+    uli.LowPart = ftNow.dwLowDateTime; uli.HighPart = ftNow.dwHighDateTime;
+    LONGLONG llNow = (LONGLONG)(uli.QuadPart / 10000000ULL) - 11644473600LL;
+
+    LONGLONG llAge = llNow - llTimestamp;
+    return (llAge >= 0) ? llAge : -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -996,25 +1112,6 @@ inline bool WGCPVerifyCertThumbprint(SCARDHANDLE hCard, PCWSTR pwszExpected)
                 }
             }
             break;
-        }
-        // Log GET DATA result
-        {
-            SYSTEMTIME stG={}; GetLocalTime(&stG);
-            WCHAR wLG[MAX_PATH]={};
-            StringCchPrintfW(wLG,MAX_PATH,L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log",
-                stG.wDay,stG.wMonth,stG.wYear);
-            HANDLE hLG=CreateFileW(wLG,FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,
-                nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
-            if(hLG!=INVALID_HANDLE_VALUE){
-                char szG[128]={};
-                wsprintfA(szG,"[%02d:%02d:%02d] SC: GET_DATA lRet=0x%08X recv=%lu b0=%02X b1=%02X b2=%02X b3=%02X b4=%02X\r\n",
-                    stG.wHour,stG.wMinute,stG.wSecond,(unsigned)lGet,(unsigned long)dwCertRecv,
-                    dwCertRecv>0?certBuf[0]:0, dwCertRecv>1?certBuf[1]:0,
-                    dwCertRecv>2?certBuf[2]:0, dwCertRecv>3?certBuf[3]:0,
-                    dwCertRecv>4?certBuf[4]:0);
-                DWORD dw=0; WriteFile(hLG,szG,lstrlenA(szG),&dw,nullptr);
-                CloseHandle(hLG);
-            }
         }
         if (lGet == SCARD_S_SUCCESS && dwCertRecv > 4)
         {

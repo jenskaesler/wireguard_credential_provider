@@ -7,6 +7,52 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.8.1] – 2026-08-01
+
+### Added
+- **Handshake timeout** – auto-disconnect when WireGuard handshake is too old
+  - New registry key `HandshakeTimeoutSec` (REG_DWORD, 0 = disabled)
+  - Pre-logon: checked every second in SC-Watch thread
+  - Post-logon: checked every 10 seconds in Network-Watch thread
+  - `LOG_CRIT` entry when disconnect is triggered (visible at LogLevel=1)
+  - Balloon notification in tray on disconnect
+  - `WGGetLastHandshakeSec()` in helpers.h: parses `wg show <profile> latest-handshakes`
+- **Corporate network detection** – auto-disconnect when on domain network
+  - `WGCPIsOnCorporateNetwork()` via `INetworkListManager` (NLA API)
+  - Pre-logon CP: blocks Connect with status message when corp network detected
+  - Post-logon Tray: auto-disconnect + balloon notification
+- **Redesigned tray context menu**
+  - Profiles shown directly (no submenu)
+  - YubiKey status with serial number (S/N via `ykman info`)
+  - Yubico Authenticator shortcut (auto-detected, launched with admin token)
+  - Delete profile with confirmation dialog (elevated fallback)
+  - Left click on tray icon toggles connect/disconnect
+- **Improved tray tooltip** (hover)
+  - WireGuard VPN / separator / status / profile / uptime / handshake age / traffic
+  - Icons: 🟢🔴 status, 🖥 host, ⏱ uptime, 🔑 handshake, 🌐 traffic
+  - Handshake age formatted as h/m/s
+  - Compact traffic format (79.6M instead of 79.6 MB) to fit 128-char limit
+
+### Changed
+- `HandshakeTimeoutSec` registry key written by installer (not configure.reg)
+- All registry keys written directly by NSI installer (configure.reg removed)
+- New keys checked individually on update, added if missing
+- `WGGetLastHandshakeSec`: uses stdout pipe instead of cmd.exe redirect
+- Traffic format: `79.6M` / `43.2M` (compact, no space before unit)
+- Tray manifest: `asInvoker` → `requireAdministrator`
+- Log encoding: unified UTF-8, no separate `_cp.log` suffix
+
+### Fixed
+- Yubico Authenticator path corrected to `C:\Program Files\Yubico\Yubico Authenticator\authenticator.exe`
+- Yubico Authenticator launched via `CreateProcess` (inherits admin token, works without UAC)
+- Double space in tooltip `Handshake  ausstehend` → `Handshake ausstehend`
+- Tray tooltip truncated at 128 chars (traffic line was cut off)
+- Tooltip icon `\u1F512` corrected to `\U0001F511`
+
+
+---
+
+
 ## [2026.7.31] – 2026-07-31
 
 ### Added

@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
 [![Language](https://img.shields.io/badge/Language-C%2B%2B17-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-2026.7.31-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-2026.8.1-blue)](CHANGELOG.md)
 [![WireGuard](https://img.shields.io/badge/WireGuard-Windows-88171A?logo=wireguard&logoColor=white)](https://www.wireguard.com/install/)
 
 ---
@@ -58,6 +58,10 @@ Authentication flow:
 - 🌙 **Dark Mode aware** – reads Windows theme preference and applies it to menus
 - 🪪 **YubiKey PIV** – same authentication gate as the pre-logon tile
 - 🔌 **Auto-disconnect** – disconnects tunnel when YubiKey is removed
+- 🤝 **Handshake watchdog** – disconnects if WireGuard handshake exceeds configurable timeout
+- 🏢 **Corporate network detection** – auto-disconnects when domain network is detected (NLA)
+- 🖱️ **Left-click toggle** – click tray icon to connect/disconnect
+- 📊 **Rich tooltip** – status, profile, uptime, handshake age, traffic stats on hover
 
 ### Shared
 - 🛑 **Clean shutdown** – `WireGuardShutdownHelper` service disconnects all tunnels on shutdown
@@ -207,6 +211,7 @@ All settings: `HKEY_LOCAL_MACHINE\SOFTWARE\Jens Kaesler\WireGuard Credential Pro
 | `SmartcardDisconnectOnRemove` | REG_DWORD | Auto-disconnect when YubiKey removed | `0` |
 | `SmartcardConnectOnInsert` | REG_DWORD | Auto-connect when YubiKey inserted | `0` |
 | `SmartcardReaderName` | REG_SZ | Restrict to specific reader name | *(empty)* |
+| `HandshakeTimeoutSec` | REG_DWORD | Disconnect if handshake older than N seconds (0=off) | `0` |
 | `LogLevel` | REG_DWORD | `0`=off `1`=CRIT `2`=WARN `3`=DEBUG | `1` |
 | `LogRetentionDays` | REG_DWORD | Auto-delete logs older than N days | `7` |
 | `ExePath` | REG_SZ | Path to `wireguard.exe` | `C:\Program Files\WireGuard\wireguard.exe` |
