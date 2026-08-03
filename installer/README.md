@@ -40,12 +40,12 @@ Uninstall.exe /S
 
 | Parameter | Typ | Beschreibung | Beispiel |
 |---|---|---|---|
-| `/LOGLEVEL=n` | DWORD | Log-Level (0=off, 1=crit, 2=warn, 3=debug) | `/LOGLEVEL=3` |
-| `/HANDSHAKE=n` | DWORD | Handshake-Timeout in Sekunden (0=deaktiviert) | `/HANDSHAKE=180` |
+| `/LOGLEVEL=n` | REG_SZ | Log-Level (0=off, 1=crit, 2=warn, 3=debug) | `/LOGLEVEL=3` |
+| `/HANDSHAKE=n` | REG_SZ | Handshake-Timeout in Sekunden (0=deaktiviert) | `/HANDSHAKE=180` |
 | `/THUMBPRINT=hex` | REG_SZ | YubiKey Zertifikat SHA-1 Thumbprint (40 Hex) | `/THUMBPRINT=164F...` |
-| `/SMARTCARD=1` | DWORD | SmartcardEnabled aktivieren | `/SMARTCARD=1` |
-| `/PINREQUIRED=1` | DWORD | PIN-Abfrage aktivieren | `/PINREQUIRED=1` |
-| `/DISCONNECTREMOVE=1` | DWORD | Tunnel trennen wenn YubiKey entfernt | `/DISCONNECTREMOVE=1` |
+| `/SMARTCARD=1` | REG_DWORD | SmartcardEnabled aktivieren | `/SMARTCARD=1` |
+| `/PINREQUIRED=1` | REG_DWORD | PIN-Abfrage aktivieren | `/PINREQUIRED=1` |
+| `/DISCONNECTREMOVE=1` | REG_DWORD | Tunnel trennen wenn YubiKey entfernt | `/DISCONNECTREMOVE=1` |
 | `/TILELABEL=text` | REG_SZ | Beschriftung des Pre-Login-Tiles | `/TILELABEL="Firmen-VPN"` |
 | `/CONFIGDIR=pfad` | REG_SZ | WireGuard Konfigurationsverzeichnis | `/CONFIGDIR="C:\WG\"` |
 
