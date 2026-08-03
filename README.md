@@ -61,7 +61,12 @@ Authentication flow:
 - 🪪 **YubiKey PIV** – same authentication gate as the pre-logon tile
 - 🔌 **Auto-disconnect** – disconnects tunnel when YubiKey is removed
 - 🤝 **Handshake watchdog** – disconnects if WireGuard handshake exceeds configurable timeout
-- 🏢 **Corporate network detection** – auto-disconnects when domain network is detected (NLA)
+- 🏢 **Corporate network detection** – auto-disconnects when the machine is physically on the corporate network
+  - Uses Windows NLA (`INetworkListManager`) – detects `DOMAIN_AUTHENTICATED` networks
+  - Pre-logon CP: blocks Connect when already on corporate network
+  - Post-logon Tray: auto-disconnects with balloon notification
+  - WireGuard virtual adapters are excluded to prevent false positives (VPN → DC reachable → wrong disconnect)
+  - Foreign domain networks (different company DC) are safe – Windows only sets `DOMAIN_AUTHENTICATED` for your own domain
 - 🖱️ **Left-click toggle** – click tray icon to connect/disconnect
 - 📊 **Rich tooltip** – status, profile, uptime, handshake age, traffic stats on hover
 

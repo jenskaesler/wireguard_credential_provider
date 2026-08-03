@@ -551,6 +551,22 @@ void WireGuardTrayApp::_ShowContextMenu()
 }
 
 // ---------------------------------------------------------------------------
+// _ShowBalloon – helper for tray balloon notifications
+// ---------------------------------------------------------------------------
+void WireGuardTrayApp::_ShowBalloon(PCWSTR pwszTitle, PCWSTR pwszMsg, DWORD dwInfoFlags)
+{
+    NOTIFYICONDATAW nid = { sizeof(nid) };
+    nid.hWnd        = _hWnd;
+    nid.uID         = 1;
+    nid.uFlags      = NIF_INFO;
+    nid.dwInfoFlags = dwInfoFlags;
+    nid.uTimeout    = 4000;
+    StringCchCopyW(nid.szInfoTitle, ARRAYSIZE(nid.szInfoTitle), pwszTitle);
+    StringCchCopyW(nid.szInfo,      ARRAYSIZE(nid.szInfo),      pwszMsg);
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+// ---------------------------------------------------------------------------
 // _Connect
 // ---------------------------------------------------------------------------
 void WireGuardTrayApp::_Connect(int profileIndex)
@@ -590,13 +606,22 @@ void WireGuardTrayApp::_Connect(int profileIndex)
     _RefreshStatus();
     _UpdateTrayIcon();
 
-    // Keine eigene Notification - WireGuard zeigt selbst eine Meldung
-    if (!bOk)
+    if (bOk)
     {
-        MessageBoxW(_hWnd,
-                    T(L"Tunnel konnte nicht gestartet werden.",
-                      L"Tunnel could not be started."),
-                    L"WireGuard VPN", MB_ICONWARNING | MB_OK);
+        WCHAR wszMsg[128] = {};
+        StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+            T(L"Tunnel '%s' verbunden.", L"Tunnel '%s' connected."),
+            pwszProfile);
+        _ShowBalloon(L"WireGuard VPN", wszMsg, NIIF_INFO);
+    }
+    else
+    {
+        WCHAR wszMsg[128] = {};
+        StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+            T(L"Tunnel '%s' konnte nicht gestartet werden.",
+              L"Tunnel '%s' could not be started."),
+            pwszProfile);
+        _ShowBalloon(L"WireGuard VPN", wszMsg, NIIF_WARNING);
     }
 }
 
@@ -615,6 +640,12 @@ void WireGuardTrayApp::_Disconnect()
     }
     _RefreshStatus();
     _UpdateTrayIcon();
+
+    WCHAR wszMsg[128] = {};
+    StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+        T(L"Tunnel '%s' getrennt.", L"Tunnel '%s' disconnected."),
+        pwszProfile);
+    _ShowBalloon(L"WireGuard VPN", wszMsg, NIIF_INFO);
 }
 
 // ---------------------------------------------------------------------------
@@ -1491,15 +1522,10 @@ DWORD WINAPI WireGuardTrayApp::_NetworkWatchThread(LPVOID lpParam)
                              MAKEWPARAM(IDM_DISCONNECT, 0), 0);
 
                 // Balloon notification
-                NOTIFYICONDATAW nid = { sizeof(nid) };
-                nid.hWnd = pApp->_hWnd; nid.uID = 1;
-                nid.uFlags = NIF_INFO; nid.dwInfoFlags = NIIF_WARNING;
-                StringCchCopyW(nid.szInfoTitle, ARRAYSIZE(nid.szInfoTitle),
-                               L"WireGuard VPN");
-                StringCchCopyW(nid.szInfo, ARRAYSIZE(nid.szInfo),
+                pApp->_ShowBalloon(L"WireGuard VPN",
                     T(L"Verbindung getrennt: Kein Handshake.",
-                      L"Disconnected: Handshake timeout."));
-                Shell_NotifyIconW(NIM_MODIFY, &nid);
+                      L"Disconnected: Handshake timeout."),
+                    NIIF_WARNING);
             }
         }
 
@@ -1514,18 +1540,10 @@ DWORD WINAPI WireGuardTrayApp::_NetworkWatchThread(LPVOID lpParam)
                 PostMessageW(pApp->_hWnd, WM_COMMAND,
                              MAKEWPARAM(IDM_DISCONNECT, 0), 0);
 
-                // Show balloon notification
-                NOTIFYICONDATAW nid = { sizeof(nid) };
-                nid.hWnd            = pApp->_hWnd;
-                nid.uID             = 1;
-                nid.uFlags          = NIF_INFO;
-                nid.dwInfoFlags     = NIIF_INFO;
-                StringCchCopyW(nid.szInfoTitle, ARRAYSIZE(nid.szInfoTitle),
-                               L"WireGuard VPN");
-                StringCchCopyW(nid.szInfo, ARRAYSIZE(nid.szInfo),
-                               T(L"Firmennetz erkannt \u2013 VPN getrennt.",
-                                 L"Corporate network detected \u2013 VPN disconnected."));
-                Shell_NotifyIconW(NIM_MODIFY, &nid);
+                pApp->_ShowBalloon(L"WireGuard VPN",
+                    T(L"Firmennetz erkannt \u2013 VPN getrennt.",
+                      L"Corporate network detected \u2013 VPN disconnected."),
+                    NIIF_INFO);
             }
         }
         else if (!bOnCorp && bWasOnCorp)

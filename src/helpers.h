@@ -19,11 +19,14 @@
 #include <wincrypt.h>
 #include <wincred.h>   // CredUIPromptForCredentialsW
 #include <netlistmgr.h> // INetworkListManager (NLA)
+#include <ws2tcpip.h>    // AF_UNSPEC, sockaddr
+#include <iphlpapi.h>    // GetAdaptersAddresses, IP_ADAPTER_ADDRESSES
 #include <comdef.h>     // _com_ptr_t  // DATA_BLOB, CryptProtectData, CryptUnprotectData
 #include <dpapi.h>     // CRYPTPROTECT_LOCAL_MACHINE
 
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "ws2_32.lib")
 
 #ifndef WGCP_TRAY_BUILD
   // CP DLL only
@@ -34,6 +37,7 @@
   #pragma comment(lib, "shlwapi.lib")
   #pragma comment(lib, "credui.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "oleaut32.lib")
   #pragma comment(lib, "shell32.lib")
   #ifndef CPFIS_INTERACTIVE
@@ -51,6 +55,7 @@
   #include <shlobj.h>        // SHCreateDirectoryExW
   #include "../../resources/resource.h"
   #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "iphlpapi.lib")
   #pragma comment(lib, "shell32.lib")
 #endif
 
@@ -132,10 +137,11 @@ struct FIELD_STATE_PAIR
 // Returns true when the machine has an active domain-authenticated network
 // connection – i.e. it is physically inside the corporate network.
 // Uses INetworkListManager (NLA) which is available from Vista onwards.
+// WireGuard interfaces are excluded to prevent false positives when the
+// VPN tunnel reaches a DC (which would cause an infinite disconnect loop).
 // ---------------------------------------------------------------------------
 inline bool WGCPIsOnCorporateNetwork()
 {
-    // Initialize COM (safe to call multiple times)
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     bool bCoInit = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
 
@@ -146,29 +152,96 @@ inline bool WGCPIsOnCorporateNetwork()
                           reinterpret_cast<void**>(&pNLM));
     if (SUCCEEDED(hr) && pNLM)
     {
-        // Enumerate all connected networks
         IEnumNetworks* pEnum = nullptr;
         if (SUCCEEDED(pNLM->GetNetworks(NLM_ENUM_NETWORK_CONNECTED, &pEnum)) && pEnum)
         {
             INetwork* pNet = nullptr;
             while (pEnum->Next(1, &pNet, nullptr) == S_OK)
             {
-                NLM_CONNECTIVITY connectivity = NLM_CONNECTIVITY_DISCONNECTED;
-                if (SUCCEEDED(pNet->GetConnectivity(&connectivity)))
+                // Skip WireGuard virtual adapters to avoid false positives
+                // when VPN tunnel reaches a DC (would cause disconnect loop)
+                bool bIsWireGuard = false;
+                IEnumNetworkConnections* pConnEnum = nullptr;
+                if (SUCCEEDED(pNet->GetNetworkConnections(&pConnEnum)) && pConnEnum)
                 {
-                    // Domain-authenticated = physically in corporate network
-                    if (connectivity & NLM_CONNECTIVITY_IPV4_INTERNET ||
-                        connectivity & NLM_CONNECTIVITY_IPV6_INTERNET)
+                    INetworkConnection* pConn = nullptr;
+                    while (pConnEnum->Next(1, &pConn, nullptr) == S_OK)
                     {
-                        // Check if domain-authenticated
-                        NLM_NETWORK_CATEGORY cat = NLM_NETWORK_CATEGORY_PUBLIC;
-                        if (SUCCEEDED(pNet->GetCategory(&cat)) &&
-                            cat == NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED)
+                        GUID adapterGuid = {};
+                        if (SUCCEEDED(pConn->GetAdapterId(&adapterGuid)))
                         {
-                            bCorporate = true;
-                            pNet->Release();
-                            break;
+                            // Identify WireGuard adapters:
+                            // Get adapter friendly name via GetAdaptersAddresses,
+                            // then check if WireGuardTunnel$<name> service exists.
+                            // This is reliable because WireGuard always creates a
+                            // service named exactly WireGuardTunnel$<profile>.
+                            WCHAR wszGuid[64] = {};
+                            StringFromGUID2(adapterGuid, wszGuid, 64);
+
+                            // Get friendly name for this adapter GUID
+                            WCHAR wszFriendly[256] = {};
+                            ULONG ulSize = 0;
+                            GetAdaptersAddresses(AF_UNSPEC,
+                                GAA_FLAG_SKIP_UNICAST|GAA_FLAG_SKIP_DNS_SERVER,
+                                nullptr, nullptr, &ulSize);
+                            IP_ADAPTER_ADDRESSES* pAddrs =
+                                static_cast<IP_ADAPTER_ADDRESSES*>(malloc(ulSize));
+                            if (pAddrs && GetAdaptersAddresses(AF_UNSPEC,
+                                GAA_FLAG_SKIP_UNICAST|GAA_FLAG_SKIP_DNS_SERVER,
+                                nullptr, pAddrs, &ulSize) == NO_ERROR)
+                            {
+                                for (auto* p = pAddrs; p; p = p->Next)
+                                {
+                                    // Match by AdapterName (= GUID string)
+                                    WCHAR wszA[64] = {};
+                                    MultiByteToWideChar(CP_ACP, 0,
+                                        p->AdapterName, -1, wszA, 64);
+                                    if (_wcsicmp(wszA, wszGuid) == 0)
+                                    {
+                                        StringCchCopyW(wszFriendly, 256,
+                                            p->FriendlyName);
+                                        break;
+                                    }
+                                }
+                            }
+                            if (pAddrs) free(pAddrs);
+
+                            // Check if WireGuardTunnel$<FriendlyName> service exists
+                            if (wszFriendly[0])
+                            {
+                                WCHAR wszSvcName[256] = {};
+                                StringCchPrintfW(wszSvcName, 256,
+                                    L"WireGuardTunnel$%s", wszFriendly);
+                                SC_HANDLE hSCM = OpenSCManagerW(nullptr, nullptr,
+                                                                  SC_MANAGER_CONNECT);
+                                if (hSCM)
+                                {
+                                    SC_HANDLE hSvc = OpenServiceW(hSCM, wszSvcName,
+                                                                   SERVICE_QUERY_STATUS);
+                                    if (hSvc)
+                                    {
+                                        bIsWireGuard = true;
+                                        CloseServiceHandle(hSvc);
+                                    }
+                                    CloseServiceHandle(hSCM);
+                                }
+                            }
                         }
+                        pConn->Release();
+                        if (bIsWireGuard) break;
+                    }
+                    pConnEnum->Release();
+                }
+
+                if (!bIsWireGuard)
+                {
+                    NLM_NETWORK_CATEGORY cat = NLM_NETWORK_CATEGORY_PUBLIC;
+                    if (SUCCEEDED(pNet->GetCategory(&cat)) &&
+                        cat == NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED)
+                    {
+                        bCorporate = true;
+                        pNet->Release();
+                        break;
                     }
                 }
                 pNet->Release();

@@ -128,6 +128,7 @@ private:
     void _AddTrayIcon();
     void _RemoveTrayIcon();
     void _UpdateTrayTooltip();
+    void _ShowBalloon(PCWSTR pwszTitle, PCWSTR pwszMsg, DWORD dwInfoFlags);
     void _ImportProfile();
     void _DeleteProfile();
     void _OpenYubiKeyManager();
