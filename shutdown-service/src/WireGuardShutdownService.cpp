@@ -17,6 +17,11 @@
 #include <winsvc.h>
 
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "wtsapi32.lib")
+#pragma comment(lib, "userenv.lib")
+#include <userenv.h>    // CreateEnvironmentBlock
+#include <wtsapi32.h>    // WTS_SESSION_LOGON, SERVICE_CONTROL_SESSIONCHANGE
+#include <tlhelp32.h>   // CreateToolhelp32Snapshot, PROCESSENTRY32W
 
 #define SVC_NAME        L"WireGuardShutdownHelper"
 #define SVC_DISPLAY     L"WireGuard Shutdown Helper"
@@ -31,6 +36,7 @@
 
 #define MAX_BUF      1024
 #define MAX_PROFILES   64
+#define REG_INSTALLDIR  L"InstallDir"
 
 static SERVICE_STATUS_HANDLE g_hSvcStatus = nullptr;
 static HANDLE                g_hStopEvent  = nullptr;
@@ -113,6 +119,114 @@ static void GetExePath(WCHAR* pwszOut, DWORD cchOut)
 }
 
 // ---------------------------------------------------------------------------
+// GetInstallDir – reads InstallDir from registry
+// ---------------------------------------------------------------------------
+static void GetInstallDir(WCHAR* pwszOut, DWORD cchOut)
+{
+    pwszOut[0] = L'\0';
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, REG_KEY, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        DWORD dwType = REG_SZ, cbData = cchOut * sizeof(WCHAR);
+        RegQueryValueExW(hKey, REG_INSTALLDIR, nullptr, &dwType,
+                         reinterpret_cast<LPBYTE>(pwszOut), &cbData);
+        RegCloseKey(hKey);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// StartTrayApp – launches WireGuardCPTray.exe in the active user session
+// A service runs in Session 0 and cannot directly show GUI in user sessions.
+// We get the active user token via WTSQueryUserToken and use CreateProcessAsUser.
+// ---------------------------------------------------------------------------
+static void StartTrayApp(DWORD dwSessionId)
+{
+    WCHAR wszInstallDir[MAX_BUF] = {};
+    GetInstallDir(wszInstallDir, MAX_BUF);
+    if (!wszInstallDir[0]) { LogEvent(L"StartTray: InstallDir not found"); return; }
+
+    WCHAR wszExe[MAX_BUF] = {};
+    StringCchPrintfW(wszExe, MAX_BUF, L"%s\\WireGuardCPTray.exe", wszInstallDir);
+    if (GetFileAttributesW(wszExe) == INVALID_FILE_ATTRIBUTES)
+    { LogEvent(L"StartTray: WireGuardCPTray.exe not found"); return; }
+
+    // Check if already running in any session
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap != INVALID_HANDLE_VALUE)
+    {
+        PROCESSENTRY32W pe = { sizeof(pe) };
+        if (Process32FirstW(hSnap, &pe))
+            do {
+                if (_wcsicmp(pe.szExeFile, L"WireGuardCPTray.exe") == 0)
+                { CloseHandle(hSnap); LogEvent(L"StartTray: already running"); return; }
+            } while (Process32NextW(hSnap, &pe));
+        CloseHandle(hSnap);
+    }
+
+    // Get the user token for the logged-in session
+    HANDLE hUserToken = nullptr;
+    if (!WTSQueryUserToken(dwSessionId, &hUserToken))
+    {
+        WCHAR e[MAX_BUF] = {};
+        StringCchPrintfW(e, MAX_BUF,
+            L"StartTray: WTSQueryUserToken failed session=%lu err=%lu",
+            dwSessionId, GetLastError());
+        LogEvent(e);
+        return;
+    }
+
+    // Try to get the elevated token (UAC disabled = tokens are already elevated,
+    // but with UAC enabled we need the linked elevated token)
+    HANDLE hElevatedToken = nullptr;
+    DWORD dwSize = 0;
+    if (GetTokenInformation(hUserToken, TokenLinkedToken,
+                             &hElevatedToken, sizeof(hElevatedToken), &dwSize)
+        && hElevatedToken)
+    {
+        // Use elevated token instead of standard user token
+        CloseHandle(hUserToken);
+        hUserToken = hElevatedToken;
+        LogEvent(L"StartTray: using elevated (linked) token");
+    }
+    else
+        LogEvent(L"StartTray: using standard token (UAC disabled or no linked token)");
+
+    // Create environment block for the user
+    LPVOID pEnv = nullptr;
+    CreateEnvironmentBlock(&pEnv, hUserToken, FALSE);
+
+    WCHAR wszCmd[MAX_BUF] = {};
+    StringCchPrintfW(wszCmd, MAX_BUF, L"\"%s\"", wszExe);
+
+    STARTUPINFOW si = { sizeof(si) };
+    si.lpDesktop = const_cast<LPWSTR>(L"winsta0\\default");
+    si.dwFlags   = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_SHOWNORMAL;
+    PROCESS_INFORMATION pi = {};
+
+    DWORD dwFlags = CREATE_NEW_CONSOLE;
+    if (pEnv) dwFlags |= CREATE_UNICODE_ENVIRONMENT;
+
+    if (CreateProcessAsUserW(hUserToken, nullptr, wszCmd,
+                              nullptr, nullptr, FALSE, dwFlags,
+                              pEnv, wszInstallDir, &si, &pi))
+    {
+        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+        LogEvent(L"StartTray: WireGuardCPTray.exe launched in user session");
+    }
+    else
+    {
+        WCHAR e[MAX_BUF] = {};
+        StringCchPrintfW(e, MAX_BUF,
+            L"StartTray: CreateProcessAsUser failed err=%lu", GetLastError());
+        LogEvent(e);
+    }
+
+    if (pEnv) DestroyEnvironmentBlock(pEnv);
+    CloseHandle(hUserToken);
+}
+
+// ---------------------------------------------------------------------------
 // Main task: disconnect all active tunnels
 // Called ONLY on the PRESHUTDOWN event
 // ---------------------------------------------------------------------------
@@ -171,7 +285,7 @@ static void DisconnectAllTunnels()
 // ---------------------------------------------------------------------------
 // Service control handler
 // ---------------------------------------------------------------------------
-static DWORD WINAPI SvcCtrlHandler(DWORD dwCtrl, DWORD, LPVOID, LPVOID)
+static DWORD WINAPI SvcCtrlHandler(DWORD dwCtrl, DWORD dwEventType, LPVOID lpEventData, LPVOID)
 {
     switch (dwCtrl)
     {
@@ -181,11 +295,32 @@ static DWORD WINAPI SvcCtrlHandler(DWORD dwCtrl, DWORD, LPVOID, LPVOID)
         return NO_ERROR;
 
     case SERVICE_CONTROL_PRESHUTDOWN:
-        // This is the moment we need
         LogEvent(L"PRESHUTDOWN received - disconnecting all WireGuard tunnels...");
         SetSvcStatus(SERVICE_STOP_PENDING);
         DisconnectAllTunnels();
         SetEvent(g_hStopEvent);
+        return NO_ERROR;
+
+    case SERVICE_CONTROL_SESSIONCHANGE:
+        {
+            WCHAR eS[MAX_BUF] = {};
+            StringCchPrintfW(eS, MAX_BUF,
+                L"SESSION_CHANGE event: dwEventType=%lu (LOGON=5)", dwEventType);
+            LogEvent(eS);
+            if (dwEventType == WTS_SESSION_LOGON)
+            {
+                // Extract session ID from event data
+                DWORD dwSession = 0;
+                if (lpEventData)
+                    dwSession = reinterpret_cast<WTSSESSION_NOTIFICATION*>(lpEventData)->dwSessionId;
+                WCHAR eL[MAX_BUF] = {};
+                StringCchPrintfW(eL, MAX_BUF,
+                    L"SESSION_LOGON detected session=%lu - starting tray in 10s...", dwSession);
+                LogEvent(eL);
+                Sleep(10000);
+                StartTrayApp(dwSession);
+            }
+        }
         return NO_ERROR;
 
     case SERVICE_CONTROL_INTERROGATE:
@@ -205,15 +340,16 @@ static VOID WINAPI ServiceMain(DWORD, LPWSTR*)
     g_hStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!g_hStopEvent) { SetSvcStatus(SERVICE_STOPPED); return; }
 
-    // Accept PRESHUTDOWN + STOP, nothing else
+    // Accept PRESHUTDOWN + STOP + SESSION_CHANGE
     SERVICE_STATUS ss = {};
     ss.dwServiceType      = SERVICE_WIN32_OWN_PROCESS;
     ss.dwCurrentState     = SERVICE_RUNNING;
-    ss.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_PRESHUTDOWN;
+    ss.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_PRESHUTDOWN
+                          | SERVICE_ACCEPT_SESSIONCHANGE;
     ss.dwWin32ExitCode    = NO_ERROR;
     SetServiceStatus(g_hSvcStatus, &ss);
 
-    LogEvent(L"WireGuard Shutdown Helper is running - waiting for shutdown.");
+    LogEvent(L"WireGuard Shutdown Helper is running - waiting for shutdown/logon.");
 
     // Block until STOP or PRESHUTDOWN
     WaitForSingleObject(g_hStopEvent, INFINITE);

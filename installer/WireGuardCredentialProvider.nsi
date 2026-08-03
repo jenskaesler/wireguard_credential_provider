@@ -356,24 +356,15 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
         ; -------------------------------------------------------
         DetailPrint "Konfiguriere Tray-App Autostart..."
         DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "WireGuard"
-        ; Autostart via shortcut in CommonStartup with RunAsAdministrator flag
-        ; HKLM\Run cannot elevate - use a shortcut with admin flag instead
-        SetShellVarContext all
-        CreateShortcut "$SMSTARTUP\WireGuard CP Tray.lnk" \
-            "$INSTDIR\WireGuardCPTray.exe" "" \
-            "$INSTDIR\WireGuardCPTray.exe" 0 SW_SHOWNORMAL "" \
-            "WireGuard Credential Provider Tray"
-        ; Set RunAsAdministrator flag on autostart shortcut
-        FileOpen $R5 "$TEMP\wgcp_setadmin_startup.ps1" w
-        FileWrite $R5 "$$lnk = '$SMSTARTUP\WireGuard CP Tray.lnk'$\r$\n"
-        FileWrite $R5 "$$b = [System.IO.File]::ReadAllBytes($$lnk)$\r$\n"
-        FileWrite $R5 "$$b[21] = $$b[21] -bor 0x20$\r$\n"
-        FileWrite $R5 "[System.IO.File]::WriteAllBytes($$lnk, $$b)$\r$\n"
-        FileClose $R5
-        nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$TEMP\wgcp_setadmin_startup.ps1"'
-        Delete "$TEMP\wgcp_setadmin_startup.ps1"
-        DetailPrint "Autostart-Shortcut mit Admin-Flag erstellt."
+        ; Autostart is handled by WireGuardShutdownHelper via SESSION_LOGON event
+        ; Remove any legacy autostart entries from previous versions
         DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "WireGuardCPTray"
+        DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "WireGuardCPTray"
+        SetShellVarContext all
+        Delete "$SMSTARTUP\WireGuard CP Tray.lnk"
+        SetShellVarContext current
+        Delete "$SMSTARTUP\WireGuard CP Tray.lnk"
+        DetailPrint "Legacy-Autostart-Eintraege bereinigt."
 
         ; -------------------------------------------------------
         ; WireGuard Startmenu-Shortcut sichern und entfernen
@@ -663,8 +654,12 @@ SectionGroup /e "un.${APPNAME}" SecGrpUninstall
         DetailPrint "$(MSG_SVC_STOP)"
         ExecWait 'taskkill.exe /F /IM WireGuardCPTray.exe'
         DetailPrint "Entferne Tray-App Autostart..."
+        ; Remove any legacy autostart entries
         DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "WireGuardCPTray"
+        DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "WireGuardCPTray"
         SetShellVarContext all
+        Delete "$SMSTARTUP\WireGuard CP Tray.lnk"
+        SetShellVarContext current
         Delete "$SMSTARTUP\WireGuard CP Tray.lnk"
 
         ; Remove tray app Start Menu shortcut
