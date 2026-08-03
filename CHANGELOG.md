@@ -7,6 +7,24 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.8.2] – 2026-08-03
+
+### Fixed
+- `dll.cpp`: Removed debug load marker writing to `C:\Windows\Temp` (DllMain + DllGetClassObject)
+- `WireGuardProvider.cpp`: Removed `ProvLog` helper and all call sites writing to `C:\Windows\Temp`
+- `helpers.h`: Removed all fallback log paths to `C:\Windows\Temp` – if INSTDIR log dir is unavailable, no log is written
+- `helpers.h`: `ReadRegDword` now also accepts `REG_SZ` with decimal string (e.g. `"180"`) – no hex conversion needed in Registry Editor
+- `WireGuardTray.cpp`: `WireGuardManager` service disabled on tray init to prevent wireguard.exe UI respawn
+- `WireGuardTray.cpp`: Send `WM_CLOSE` before `TerminateProcess` so wireguard.exe can clean up its tray icon via `Shell_NotifyIcon(NIM_DELETE)`
+- `installer/WireGuardCredentialProvider.nsi`: Migrate legacy `REG_DWORD` values (`LogLevel`, `LogRetentionDays`, `HandshakeTimeoutSec`) to `REG_SZ` on update
+- `installer/WireGuardCredentialProvider.nsi`: `HKLM\Run` autostart replaced by `CommonStartup` shortcut with `RunAsAdministrator` flag – tray now starts as admin on login
+- Silent install parameters added: `/LOGLEVEL`, `/HANDSHAKE`, `/THUMBPRINT`, `/SMARTCARD`, `/PINREQUIRED`, `/DISCONNECTREMOVE`, `/TILELABEL`, `/CONFIGDIR`
+- All registry keys now written directly by installer (configure.reg removed)
+
+
+---
+
+
 ## [2026.8.1] – 2026-08-01
 
 ### Added

@@ -18,26 +18,6 @@ BOOL WINAPI DllMain(HINSTANCE hInst, DWORD dwReason, LPVOID)
     {
         g_hInst = hInst;
         DisableThreadLibraryCalls(hInst);
-        // Debug: write load marker directly to verify DLL is loaded
-        SYSTEMTIME st = {}; GetLocalTime(&st);
-        WCHAR wszLog[MAX_PATH] = {};
-        StringCchPrintfW(wszLog, MAX_PATH,
-            L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log",
-            st.wDay, st.wMonth, st.wYear);
-        HANDLE hF = CreateFileW(wszLog, FILE_APPEND_DATA, FILE_SHARE_READ,
-            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (hF != INVALID_HANDLE_VALUE)
-        {
-            // Write as UTF-8/ASCII - avoids BOM/encoding issues
-            char szExe[MAX_PATH] = {};
-            GetModuleFileNameA(nullptr, szExe, MAX_PATH);
-            char szLine[512] = {};
-            wsprintfA(szLine, "[%02d:%02d:%02d] CP DLL loaded in: %s\r\n",
-                st.wHour, st.wMinute, st.wSecond, szExe);
-            DWORD dw = 0;
-            WriteFile(hF, szLine, lstrlenA(szLine), &dw, nullptr);
-            CloseHandle(hF);
-        }
     }
     return TRUE;
 }
@@ -76,26 +56,6 @@ private:
 
 STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void** ppv)
 {
-    // Log every call to DllGetClassObject
-    {
-        SYSTEMTIME st = {}; GetLocalTime(&st);
-        WCHAR wszLog[MAX_PATH] = {};
-        StringCchPrintfW(wszLog, MAX_PATH,
-            L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log",
-            st.wDay, st.wMonth, st.wYear);
-        HANDLE hF = CreateFileW(wszLog, FILE_APPEND_DATA,
-            FILE_SHARE_READ|FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
-            FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (hF != INVALID_HANDLE_VALUE)
-        {
-            char szLine[256] = {};
-            bool bMatch = IsEqualCLSID(rclsid, CLSID_WireGuardProvider);
-            wsprintfA(szLine, "[%02d:%02d:%02d] DllGetClassObject called, CLSID match=%d\r\n",
-                st.wHour, st.wMinute, st.wSecond, bMatch ? 1 : 0);
-            DWORD dw = 0; WriteFile(hF, szLine, lstrlenA(szLine), &dw, nullptr);
-            CloseHandle(hF);
-        }
-    }
     *ppv = nullptr;
     if (!IsEqualCLSID(rclsid, CLSID_WireGuardProvider))
         return CLASS_E_CLASSNOTAVAILABLE;

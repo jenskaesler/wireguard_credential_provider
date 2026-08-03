@@ -23,22 +23,6 @@ STDMETHODIMP_(ULONG) WireGuardProvider::Release()
 {
     LONG c = InterlockedDecrement(&_cRef); if (!c) delete this; return c;
 }
-static void ProvLog(const char* msg)
-{
-    SYSTEMTIME st = {}; GetLocalTime(&st);
-    WCHAR wszLog[MAX_PATH] = {};
-    StringCchPrintfW(wszLog, MAX_PATH,
-        L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d_cp.log", st.wDay, st.wMonth, st.wYear);
-    HANDLE hF = CreateFileW(wszLog, FILE_APPEND_DATA, FILE_SHARE_READ|FILE_SHARE_WRITE,
-        nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hF != INVALID_HANDLE_VALUE) {
-        char szLine[256]={};
-        wsprintfA(szLine,"[%02d:%02d:%02d] %s\r\n",st.wHour,st.wMinute,st.wSecond,msg);
-        DWORD dw=0; WriteFile(hF,szLine,lstrlenA(szLine),&dw,nullptr);
-        CloseHandle(hF);
-    }
-}
-
 STDMETHODIMP WireGuardProvider::SetUsageScenario(
     CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, DWORD)
 {

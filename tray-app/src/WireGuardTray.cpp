@@ -134,6 +134,7 @@ bool WireGuardTrayApp::Init(HINSTANCE hInst)
     _AddTrayIcon();
     SetTimer(_hWnd, TIMER_REFRESH_ID, TIMER_REFRESH_MS, nullptr);
 
+    _DisableWireGuardManager();
     _StartWireGuardWatcher();
     if (_scConfig.bEnabled &&
         (_scConfig.bConnectOnInsert || _scConfig.bDisconnectOnRemove))
@@ -1107,6 +1108,41 @@ void WireGuardTrayApp::_StartWireGuardWatcher()
     }
 }
 
+// ---------------------------------------------------------------------------
+// _DisableWireGuardManager
+// Disables the WireGuard Manager service which auto-spawns wireguard.exe UI.
+// The tunnel services (WireGuardTunnel$*) are not affected.
+// ---------------------------------------------------------------------------
+void WireGuardTrayApp::_DisableWireGuardManager()
+{
+    SC_HANDLE hSCM = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (!hSCM) return;
+
+    SC_HANDLE hSvc = OpenServiceW(hSCM, L"WireGuardManager",
+                                   SERVICE_CHANGE_CONFIG | SERVICE_STOP |
+                                   SERVICE_QUERY_STATUS);
+    if (hSvc)
+    {
+        // Stop the service if running
+        SERVICE_STATUS ss = {};
+        QueryServiceStatus(hSvc, &ss);
+        if (ss.dwCurrentState == SERVICE_RUNNING)
+        {
+            ControlService(hSvc, SERVICE_CONTROL_STOP, &ss);
+            LOG_DEBUG(L"WireGuardManager: service stopped");
+        }
+        // Disable: set start type to DISABLED
+        if (ChangeServiceConfigW(hSvc, SERVICE_NO_CHANGE, SERVICE_DISABLED,
+                                  SERVICE_NO_CHANGE, nullptr, nullptr, nullptr,
+                                  nullptr, nullptr, nullptr, nullptr))
+            LOG_DEBUG(L"WireGuardManager: service disabled");
+        else
+            LOG_WARN(L"WireGuardManager: could not disable service");
+        CloseServiceHandle(hSvc);
+    }
+    CloseServiceHandle(hSCM);
+}
+
 void WireGuardTrayApp::_StopWireGuardWatcher()
 {
     if (_hWatcherStop)
@@ -1179,20 +1215,30 @@ DWORD WINAPI WireGuardTrayApp::_WatcherThread(LPVOID lpParam)
             if (wc.found)
             {
                 WCHAR d[64] = {};
-                StringCchPrintfW(d, 64, L"Tray: WireGuard UI erkannt (PID %lu) - wird beendet", dwPid);
+                StringCchPrintfW(d, 64, L"Tray: WireGuard UI detected (PID %lu) - closing", dwPid);
                 LOG_WARN(d);
-                // Hide all windows immediately before terminating (prevents flash)
-                struct HideData { DWORD pid; };
-                HideData hd = { dwPid };
+
+                // Step 1: Send WM_CLOSE to all windows so the process can
+                //         clean up its tray icon via Shell_NotifyIcon(NIM_DELETE)
+                struct CloseData { DWORD pid; };
+                CloseData cd = { dwPid };
                 EnumWindows([](HWND hW, LPARAM lp) -> BOOL {
                     DWORD pid = 0;
                     GetWindowThreadProcessId(hW, &pid);
-                    if (pid == reinterpret_cast<HideData*>(lp)->pid)
-                        ShowWindow(hW, SW_HIDE);
+                    if (pid == reinterpret_cast<CloseData*>(lp)->pid)
+                    {
+                        ShowWindow(hW, SW_HIDE);       // hide immediately
+                        PostMessageW(hW, WM_CLOSE, 0, 0); // ask to close
+                    }
                     return TRUE;
-                }, reinterpret_cast<LPARAM>(&hd));
-                // Then terminate the process
-                TerminateProcess(hProc, 0);
+                }, reinterpret_cast<LPARAM>(&cd));
+
+                // Step 2: Wait up to 1 second for graceful exit
+                DWORD dwWait = WaitForSingleObject(hProc, 1000);
+
+                // Step 3: Force-terminate if still running
+                if (dwWait != WAIT_OBJECT_0)
+                    TerminateProcess(hProc, 0);
             }
 
             CloseHandle(hProc);

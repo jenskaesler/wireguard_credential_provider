@@ -18,6 +18,12 @@
 :: Minimal (nur CP + Tray)
 Setup_WireGuardCredentialProvider_x64.exe /S
 
+:: Mit Registry-Parametern (alle optional, kombinierbar)
+Setup_WireGuardCredentialProvider_x64.exe /S /SMARTCARD=1 /THUMBPRINT=164F6689... /DISCONNECTREMOVE=1
+Setup_WireGuardCredentialProvider_x64.exe /S /LOGLEVEL=3
+Setup_WireGuardCredentialProvider_x64.exe /S /HANDSHAKE=180 /TILELABEL="Firmen-VPN"
+Setup_WireGuardCredentialProvider_x64.exe /S /CONFIGDIR="C:\WG\Configs\"
+
 :: Vollständig (CP + Tray + alle YubiKey-Tools)
 Setup_WireGuardCredentialProvider_x64.exe /S /FULL
 
@@ -27,6 +33,23 @@ Setup_WireGuardCredentialProvider_x64.exe /S /YKAUTH /YKMINI /YKMGRCLI
 :: Silent-Deinstallation
 Uninstall.exe /S
 ```
+
+---
+
+## Silent-Parameter
+
+| Parameter | Typ | Beschreibung | Beispiel |
+|---|---|---|---|
+| `/LOGLEVEL=n` | DWORD | Log-Level (0=off, 1=crit, 2=warn, 3=debug) | `/LOGLEVEL=3` |
+| `/HANDSHAKE=n` | DWORD | Handshake-Timeout in Sekunden (0=deaktiviert) | `/HANDSHAKE=180` |
+| `/THUMBPRINT=hex` | REG_SZ | YubiKey Zertifikat SHA-1 Thumbprint (40 Hex) | `/THUMBPRINT=164F...` |
+| `/SMARTCARD=1` | DWORD | SmartcardEnabled aktivieren | `/SMARTCARD=1` |
+| `/PINREQUIRED=1` | DWORD | PIN-Abfrage aktivieren | `/PINREQUIRED=1` |
+| `/DISCONNECTREMOVE=1` | DWORD | Tunnel trennen wenn YubiKey entfernt | `/DISCONNECTREMOVE=1` |
+| `/TILELABEL=text` | REG_SZ | Beschriftung des Pre-Login-Tiles | `/TILELABEL="Firmen-VPN"` |
+| `/CONFIGDIR=pfad` | REG_SZ | WireGuard Konfigurationsverzeichnis | `/CONFIGDIR="C:\WG\"` |
+
+> Parameter werden immer angewendet – auch bei Updates. Nicht angegebene Parameter bleiben unverändert.
 
 ---
 
@@ -80,6 +103,20 @@ Der Installer setzt folgende Werte:
 | `WgExePath` | REG_SZ | Pfad zu `wg.exe` |
 | `ConfigDir` | REG_SZ | Konfigurationsverzeichnis |
 | `InstallDir` | REG_SZ | Installationsverzeichnis |
-| `LogLevel` | REG_DWORD | Log-Level (1=CRIT, 3=DEBUG) |
+| `LogLevel` | REG_SZ | Log-Level als Dezimalzahl (`"1"`=CRIT, `"3"`=DEBUG) |
+| `LogRetentionDays` | REG_SZ | Log-Dateien älter als N Tage löschen (`"7"`) |
+| `HandshakeTimeoutSec` | REG_SZ | Tunnel trennen wenn Handshake älter als N Sekunden (`"0"`=aus) |
 
 `SmartcardEnabled` und `SmartcardCertThumbprint` werden vom `Setup-YubiKey.ps1` gesetzt.
+
+> **Hinweis:** `LogLevel`, `LogRetentionDays` und `HandshakeTimeoutSec` werden als `REG_SZ` gespeichert.
+> Im Regedit einfach die Dezimalzahl als Text eingeben – keine Hex-Konvertierung nötig.
+
+---
+
+## Autostart
+
+Die Tray-App startet automatisch über einen Shortcut in `CommonStartup` mit gesetztem `RunAsAdministrator`-Flag.
+Dies stellt sicher dass die App als Administrator läuft ohne UAC-Abfrage (auch bei deaktivierter UAC).
+
+Der Shortcut wird beim Deinstallieren automatisch entfernt.

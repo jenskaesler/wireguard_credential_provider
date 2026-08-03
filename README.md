@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
 [![Language](https://img.shields.io/badge/Language-C%2B%2B17-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-2026.8.1-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-2026.8.2-blue)](CHANGELOG.md)
 [![WireGuard](https://img.shields.io/badge/WireGuard-Windows-88171A?logo=wireguard&logoColor=white)](https://www.wireguard.com/install/)
 
 ---
@@ -19,6 +19,8 @@ Many commercial VPN clients solve this with a "pre-logon" feature. **WireGuard f
 The **WireGuard Credential Provider** adds a dedicated tile to the Windows login screen, allowing tunnels to be started and stopped directly before signing in. It also ships a **Post-Logon Tray Application** that replaces the WireGuard UI entirely for domain-managed machines.
 
 > **Based on:** [WireGuard Credential Provider UI](https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/CredentialProvider) – the credential provider shell architecture follows the Microsoft Windows Classic Samples reference implementation.
+>
+> **WireGuard for Windows:** This project integrates with [WireGuard for Windows](https://github.com/WireGuard/wireguard-windows) – the official WireGuard client by Jason A. Donenfeld. The tunnel management (`wireguard.exe /installtunnelservice`, `wg.exe show`) and the `.conf.dpapi` configuration format are part of that project.
 
 ---
 
@@ -68,6 +70,7 @@ Authentication flow:
 - ⚙️ **Single Registry key** – one key controls both pre-logon and post-logon behavior
 - 📝 **Structured logging** – configurable log levels (CRIT / WARN / DEBUG), daily log files
 - 🏢 **GPO-ready** – all settings distributable via Group Policy Preferences
+- 🔑 **Admin autostart** – tray starts as Administrator via CommonStartup shortcut (no UAC prompt)
 
 ---
 
@@ -198,6 +201,12 @@ The script:
 
 ---
 
+## 📦 Installer Documentation
+
+For silent deployment parameters, MDM integration and YubiKey setup see [`installer/README.md`](installer/README.md).
+
+---
+
 ## ⚙️ Configuration
 
 All settings: `HKEY_LOCAL_MACHINE\SOFTWARE\Jens Kaesler\WireGuard Credential Provider`
@@ -211,9 +220,9 @@ All settings: `HKEY_LOCAL_MACHINE\SOFTWARE\Jens Kaesler\WireGuard Credential Pro
 | `SmartcardDisconnectOnRemove` | REG_DWORD | Auto-disconnect when YubiKey removed | `0` |
 | `SmartcardConnectOnInsert` | REG_DWORD | Auto-connect when YubiKey inserted | `0` |
 | `SmartcardReaderName` | REG_SZ | Restrict to specific reader name | *(empty)* |
-| `HandshakeTimeoutSec` | REG_DWORD | Disconnect if handshake older than N seconds (0=off) | `0` |
-| `LogLevel` | REG_DWORD | `0`=off `1`=CRIT `2`=WARN `3`=DEBUG | `1` |
-| `LogRetentionDays` | REG_DWORD | Auto-delete logs older than N days | `7` |
+| `HandshakeTimeoutSec` | REG_SZ | Disconnect if handshake older than N seconds (0=off) | `"0"` |
+| `LogLevel` | REG_SZ | `0`=off `1`=CRIT `2`=WARN `3`=DEBUG | `"1"` |
+| `LogRetentionDays` | REG_SZ | Auto-delete logs older than N days | `"7"` |
 | `ExePath` | REG_SZ | Path to `wireguard.exe` | `C:\Program Files\WireGuard\wireguard.exe` |
 | `ConfigDir` | REG_SZ | WireGuard configuration directory | `C:\Program Files\WireGuard\Data\Configurations\` |
 
@@ -229,7 +238,9 @@ Enable verbose logging:
 
 Log files:
 - **Tray App:** `INSTDIR\logs\wgcp_ddMMyyyy.log`
-- **CP DLL (pre-logon):** `C:\Windows\Temp\wgcp_ddMMyyyy_cp.log`
+- **CP DLL (pre-logon):** `INSTDIR\logs\wgcp_ddMMyyyy.log` (same file)
+
+> Logs are only written when `INSTDIR` is accessible. No fallback to `C:\Windows\Temp`.
 
 ---
 

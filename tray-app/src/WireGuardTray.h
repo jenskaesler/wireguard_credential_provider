@@ -136,6 +136,7 @@ private:
     void _CheckAndRemoveWireGuardShortcut();
 
     // WireGuard UI Watcher
+    void _DisableWireGuardManager();
     void _StartWireGuardWatcher();
     void _StopWireGuardWatcher();
     static DWORD WINAPI _WatcherThread(LPVOID lpParam);

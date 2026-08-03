@@ -27,6 +27,21 @@ Unicode true
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !include "Sections.nsh"
+!include "FileFunc.nsh"
+
+; ============================================================
+; Silent install parameters (all optional)
+; Usage: Setup.exe /S [/PARAM=value ...]
+;
+;   /LOGLEVEL=n              LogLevel (0=off 1=crit 2=warn 3=debug)
+;   /HANDSHAKE=n             HandshakeTimeoutSec (0=disabled)
+;   /THUMBPRINT=<hex>        SmartcardCertThumbprint (40 hex chars)
+;   /SMARTCARD=1             SmartcardEnabled
+;   /PINREQUIRED=1           SmartcardPinRequired
+;   /DISCONNECTREMOVE=1      SmartcardDisconnectOnRemove
+;   /TILELABEL=<text>        TileLabel (pre-logon tile heading)
+;   /CONFIGDIR=<path>        WireGuard configuration directory
+; ============================================================
 
 ; ============================================================
 ; Version – automatically extracted from the DLL
@@ -341,7 +356,24 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
         ; -------------------------------------------------------
         DetailPrint "Konfiguriere Tray-App Autostart..."
         DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "WireGuard"
-        WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "WireGuardCPTray" '"$INSTDIR\WireGuardCPTray.exe"'
+        ; Autostart via shortcut in CommonStartup with RunAsAdministrator flag
+        ; HKLM\Run cannot elevate - use a shortcut with admin flag instead
+        SetShellVarContext all
+        CreateShortcut "$SMSTARTUP\WireGuard CP Tray.lnk" \
+            "$INSTDIR\WireGuardCPTray.exe" "" \
+            "$INSTDIR\WireGuardCPTray.exe" 0 SW_SHOWNORMAL "" \
+            "WireGuard Credential Provider Tray"
+        ; Set RunAsAdministrator flag on autostart shortcut
+        FileOpen $R5 "$TEMP\wgcp_setadmin_startup.ps1" w
+        FileWrite $R5 "$$lnk = '$SMSTARTUP\WireGuard CP Tray.lnk'$\r$\n"
+        FileWrite $R5 "$$b = [System.IO.File]::ReadAllBytes($$lnk)$\r$\n"
+        FileWrite $R5 "$$b[21] = $$b[21] -bor 0x20$\r$\n"
+        FileWrite $R5 "[System.IO.File]::WriteAllBytes($$lnk, $$b)$\r$\n"
+        FileClose $R5
+        nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$TEMP\wgcp_setadmin_startup.ps1"'
+        Delete "$TEMP\wgcp_setadmin_startup.ps1"
+        DetailPrint "Autostart-Shortcut mit Admin-Flag erstellt."
+        DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "WireGuardCPTray"
 
         ; -------------------------------------------------------
         ; WireGuard Startmenu-Shortcut sichern und entfernen
@@ -438,11 +470,40 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
         WriteRegStr HKLM "${REG_WGCP}" "WgExePath" "$PROGRAMFILES64\WireGuard\wg.exe"
         WriteRegStr HKLM "${REG_WGCP}" "ConfigDir" "$PROGRAMFILES64\WireGuard\Data\Configurations\"
 
+        ; -------------------------------------------------------
+        ; Migrate legacy DWORD values to REG_SZ (v2026.8.1+)
+        ; Delete old DWORD entries - will be re-created as REG_SZ
+        ; -------------------------------------------------------
+        ClearErrors
+        ReadRegDWORD $R0 HKLM "${REG_WGCP}" "LogLevel"
+        ${IfNot} ${Errors}
+            ; Old DWORD exists - save value, delete, re-create as REG_SZ
+            DeleteRegValue HKLM "${REG_WGCP}" "LogLevel"
+            WriteRegStr HKLM "${REG_WGCP}" "LogLevel" $R0
+            DetailPrint "Migriert: LogLevel DWORD -> REG_SZ ($R0)"
+        ${EndIf}
+
+        ClearErrors
+        ReadRegDWORD $R0 HKLM "${REG_WGCP}" "LogRetentionDays"
+        ${IfNot} ${Errors}
+            DeleteRegValue HKLM "${REG_WGCP}" "LogRetentionDays"
+            WriteRegStr HKLM "${REG_WGCP}" "LogRetentionDays" $R0
+            DetailPrint "Migriert: LogRetentionDays DWORD -> REG_SZ ($R0)"
+        ${EndIf}
+
+        ClearErrors
+        ReadRegDWORD $R0 HKLM "${REG_WGCP}" "HandshakeTimeoutSec"
+        ${IfNot} ${Errors}
+            DeleteRegValue HKLM "${REG_WGCP}" "HandshakeTimeoutSec"
+            WriteRegStr HKLM "${REG_WGCP}" "HandshakeTimeoutSec" $R0
+            DetailPrint "Migriert: HandshakeTimeoutSec DWORD -> REG_SZ ($R0)"
+        ${EndIf}
+
         ; Neue Keys seit letztem Release - immer prüfen und ggf. anlegen
         ClearErrors
         ReadRegDWORD $R0 HKLM "${REG_WGCP}" "HandshakeTimeoutSec"
         ${If} $R0 == ""
-            WriteRegDWORD HKLM "${REG_WGCP}" "HandshakeTimeoutSec" 0
+            WriteRegStr   HKLM "${REG_WGCP}" "HandshakeTimeoutSec" "0"
         ${EndIf}
 
         ; Weitere Werte nur beim Erstinstall (Benutzereinstellungen erhalten)
@@ -454,8 +515,8 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
             WriteRegStr   HKLM "${REG_WGCP}" "IconConnected"               ""
             WriteRegStr   HKLM "${REG_WGCP}" "IconDisconnected"            ""
             WriteRegStr   HKLM "${REG_WGCP}" "LogPath"                     ""
-            WriteRegDWORD HKLM "${REG_WGCP}" "LogLevel"                    1
-            WriteRegDWORD HKLM "${REG_WGCP}" "LogRetentionDays"            7
+            WriteRegStr   HKLM "${REG_WGCP}" "LogLevel"                    "1"
+            WriteRegStr   HKLM "${REG_WGCP}" "LogRetentionDays"            "7"
             WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardEnabled"            0
             WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardPinRequired"        1
             WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardPinMinLength"       4
@@ -465,10 +526,64 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
             WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardDisconnectOnRemove" 0
             WriteRegStr   HKLM "${REG_WGCP}" "SmartcardReaderName"         ""
             WriteRegStr   HKLM "${REG_WGCP}" "SmartcardCertThumbprint"     ""
-            WriteRegDWORD HKLM "${REG_WGCP}" "HandshakeTimeoutSec"         0
+            WriteRegStr   HKLM "${REG_WGCP}" "HandshakeTimeoutSec"         "0"
             DetailPrint "Standard-Konfiguration geschrieben."
         ${Else}
             DetailPrint "Bestehende Konfiguration beibehalten."
+        ${EndIf}
+
+        ; -------------------------------------------------------
+        ; Apply silent install parameters (override defaults)
+        ; These are always applied when provided, even on update
+        ; -------------------------------------------------------
+        ${GetParameters} $R0
+
+        ${GetOptions} $R0 "/LOGLEVEL=" $R1
+        ${If} $R1 != ""
+            WriteRegStr   HKLM "${REG_WGCP}" "LogLevel" $R1
+            DetailPrint "Parameter: LogLevel=$R1"
+        ${EndIf}
+
+        ${GetOptions} $R0 "/HANDSHAKE=" $R1
+        ${If} $R1 != ""
+            WriteRegStr   HKLM "${REG_WGCP}" "HandshakeTimeoutSec" $R1
+            DetailPrint "Parameter: HandshakeTimeoutSec=$R1"
+        ${EndIf}
+
+        ${GetOptions} $R0 "/THUMBPRINT=" $R1
+        ${If} $R1 != ""
+            WriteRegStr HKLM "${REG_WGCP}" "SmartcardCertThumbprint" $R1
+            DetailPrint "Parameter: SmartcardCertThumbprint=$R1"
+        ${EndIf}
+
+        ${GetOptions} $R0 "/SMARTCARD=" $R1
+        ${If} $R1 != ""
+            WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardEnabled" $R1
+            DetailPrint "Parameter: SmartcardEnabled=$R1"
+        ${EndIf}
+
+        ${GetOptions} $R0 "/PINREQUIRED=" $R1
+        ${If} $R1 != ""
+            WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardPinRequired" $R1
+            DetailPrint "Parameter: SmartcardPinRequired=$R1"
+        ${EndIf}
+
+        ${GetOptions} $R0 "/DISCONNECTREMOVE=" $R1
+        ${If} $R1 != ""
+            WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardDisconnectOnRemove" $R1
+            DetailPrint "Parameter: SmartcardDisconnectOnRemove=$R1"
+        ${EndIf}
+
+        ${GetOptions} $R0 "/TILELABEL=" $R1
+        ${If} $R1 != ""
+            WriteRegStr HKLM "${REG_WGCP}" "TileLabel" $R1
+            DetailPrint "Parameter: TileLabel=$R1"
+        ${EndIf}
+
+        ${GetOptions} $R0 "/CONFIGDIR=" $R1
+        ${If} $R1 != ""
+            WriteRegStr HKLM "${REG_WGCP}" "ConfigDir" $R1
+            DetailPrint "Parameter: ConfigDir=$R1"
         ${EndIf}
 
     SectionEnd
@@ -549,6 +664,8 @@ SectionGroup /e "un.${APPNAME}" SecGrpUninstall
         ExecWait 'taskkill.exe /F /IM WireGuardCPTray.exe'
         DetailPrint "Entferne Tray-App Autostart..."
         DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "WireGuardCPTray"
+        SetShellVarContext all
+        Delete "$SMSTARTUP\WireGuard CP Tray.lnk"
 
         ; Remove tray app Start Menu shortcut
         SetShellVarContext all

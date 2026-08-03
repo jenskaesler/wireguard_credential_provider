@@ -197,11 +197,20 @@ inline void ReadRegString(HKEY hKey, PCWSTR pwszValue,
 
 inline DWORD ReadRegDword(HKEY hKey, PCWSTR pwszValue, DWORD dwDefault)
 {
-    DWORD dwType = REG_DWORD, dwVal = 0, cbData = sizeof(dwVal);
+    DWORD dwType = 0, dwVal = 0, cbData = sizeof(dwVal);
+    // Try REG_DWORD first
     if (RegQueryValueExW(hKey, pwszValue, nullptr, &dwType,
                          reinterpret_cast<LPBYTE>(&dwVal), &cbData) == ERROR_SUCCESS
         && dwType == REG_DWORD)
         return dwVal;
+    // Fallback: REG_SZ with decimal number (easier to edit without hex conversion)
+    WCHAR wszStr[32] = {};
+    DWORD cbStr = sizeof(wszStr);
+    dwType = 0;
+    if (RegQueryValueExW(hKey, pwszValue, nullptr, &dwType,
+                         reinterpret_cast<LPBYTE>(wszStr), &cbStr) == ERROR_SUCCESS
+        && (dwType == REG_SZ || dwType == REG_EXPAND_SZ) && wszStr[0])
+        return static_cast<DWORD>(_wtoi(wszStr));
     return dwDefault;
 }
 
@@ -272,9 +281,8 @@ inline void WGCPResolvLogPath(WCHAR* pwszOut, DWORD cchOut)
         }
         else
         {
-            StringCchPrintfW(pwszOut, cchOut,
-                             L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log",
-                             st.wDay, st.wMonth, st.wYear);
+            // No InstallDir known - no log path available
+            pwszOut[0] = L'\0';
         }
         return;
     }
@@ -392,14 +400,7 @@ inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
         if (pSlash)
         {
             *pSlash = L'\0';
-            DWORD dwDirErr = SHCreateDirectoryExW(nullptr, wszDir, nullptr);
-            if (dwDirErr != ERROR_SUCCESS && dwDirErr != ERROR_ALREADY_EXISTS)
-            {
-                SYSTEMTIME stTmp = {}; GetLocalTime(&stTmp);
-                StringCchPrintfW(wszPath, MAX_PATH_WGCP,
-                    L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log",
-                    stTmp.wDay, stTmp.wMonth, stTmp.wYear);
-            }
+            SHCreateDirectoryExW(nullptr, wszDir, nullptr);
         }
     }
 
@@ -407,18 +408,7 @@ inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
     HANDLE hFile = CreateFileW(wszPath, FILE_APPEND_DATA,
                                FILE_SHARE_READ | FILE_SHARE_WRITE,
                                nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hFile == INVALID_HANDLE_VALUE)
-    {
-        // Fallback: C:\Windows\Temp (always writable, even as SYSTEM)
-        SYSTEMTIME stFb = {}; GetLocalTime(&stFb);
-        StringCchPrintfW(wszPath, MAX_PATH_WGCP,
-            L"C:\\Windows\\Temp\\wgcp_%02d%02d%04d.log",
-            stFb.wDay, stFb.wMonth, stFb.wYear);
-        hFile = CreateFileW(wszPath, FILE_APPEND_DATA,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE,
-                            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (hFile == INVALID_HANDLE_VALUE) return;
-    }
+    if (hFile == INVALID_HANDLE_VALUE) return;
 
     // Format log line as UTF-8
     PCWSTR pwszLvl = (dwLevel==WGCP_LOG_CRIT)?L"[CRIT] "
@@ -767,7 +757,6 @@ inline LONGLONG WGGetLastHandshakeSec(PCWSTR pwszWgExe, PCWSTR pwszProfile)
     if (dwRead == 0) return -1;
 
     // Parse: "<pubkey>\t<unix_timestamp>\n"
-    // Find the tab, then parse the timestamp
     char* pTab = strchr(szBuf, '\t');
     if (!pTab) return -1;
     LONGLONG llTimestamp = _atoi64(pTab + 1);
