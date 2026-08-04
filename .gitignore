@@ -31,7 +31,6 @@ shutdown-service/Release/
 # Laufzeit-Ausgaben
 *.dll
 *.exe
-!installer/build.bat
 
 # Logdateien
 *.log
@@ -41,3 +40,6 @@ wgcp_debug.log
 *.bak
 *.tmp
 Thumbs.db
+
+# Docs
+docs/

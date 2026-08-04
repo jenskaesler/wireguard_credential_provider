@@ -1007,6 +1007,134 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
 // ---------------------------------------------------------------------------
 // _ImportProfile
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// _EncryptProfileViaMgr
+// Starts the WireGuardManager service briefly so it encrypts a plain .conf
+// file into .conf.dpapi, then stops and disables it again.
+// pwszConfPath    – full path to the .conf file that was copied
+// pwszProfileName – profile name without extension (used for log messages)
+// Returns true if the .conf.dpapi file was produced within the timeout.
+// ---------------------------------------------------------------------------
+bool WireGuardTrayApp::_EncryptProfileViaMgr(PCWSTR pwszConfPath,
+                                              PCWSTR pwszProfileName)
+{
+    // Build the expected .conf.dpapi path
+    WCHAR wszDpapi[MAX_PATH_WGCP] = {};
+    StringCchPrintfW(wszDpapi, MAX_PATH_WGCP, L"%s.dpapi", pwszConfPath);
+
+    // Open the SCM and the WireGuardManager service
+    SC_HANDLE hSCM = OpenSCManagerW(nullptr, nullptr,
+                                     SC_MANAGER_CONNECT | SC_MANAGER_ENUMERATE_SERVICE);
+    if (!hSCM)
+    {
+        LOG_WARN(L"EncryptViaMgr: OpenSCManager failed");
+        return false;
+    }
+
+    SC_HANDLE hSvc = OpenServiceW(hSCM, L"WireGuardManager",
+                                   SERVICE_START | SERVICE_STOP |
+                                   SERVICE_QUERY_STATUS | SERVICE_CHANGE_CONFIG);
+    if (!hSvc)
+    {
+        WCHAR e[64] = {};
+        StringCchPrintfW(e, 64, L"EncryptViaMgr: OpenService failed err=%lu", GetLastError());
+        LOG_WARN(e);
+        CloseServiceHandle(hSCM);
+        return false;
+    }
+
+    // Re-enable the service temporarily (it was set to DISABLED)
+    if (!ChangeServiceConfigW(hSvc, SERVICE_NO_CHANGE, SERVICE_DEMAND_START,
+                               SERVICE_NO_CHANGE, nullptr, nullptr, nullptr,
+                               nullptr, nullptr, nullptr, nullptr))
+    {
+        WCHAR e[64] = {};
+        StringCchPrintfW(e, 64, L"EncryptViaMgr: ChangeConfig(DEMAND_START) failed err=%lu", GetLastError());
+        LOG_WARN(e);
+        CloseServiceHandle(hSvc);
+        CloseServiceHandle(hSCM);
+        return false;
+    }
+    LOG_DEBUG(L"EncryptViaMgr: WireGuardManager re-enabled (DEMAND_START)");
+
+    // Start the service
+    if (!StartServiceW(hSvc, 0, nullptr))
+    {
+        DWORD dwErr = GetLastError();
+        if (dwErr != ERROR_SERVICE_ALREADY_RUNNING)
+        {
+            WCHAR e[64] = {};
+            StringCchPrintfW(e, 64, L"EncryptViaMgr: StartService failed err=%lu", dwErr);
+            LOG_WARN(e);
+            // Re-disable before returning
+            ChangeServiceConfigW(hSvc, SERVICE_NO_CHANGE, SERVICE_DISABLED,
+                                  SERVICE_NO_CHANGE, nullptr, nullptr, nullptr,
+                                  nullptr, nullptr, nullptr, nullptr);
+            CloseServiceHandle(hSvc);
+            CloseServiceHandle(hSCM);
+            return false;
+        }
+    }
+    LOG_DEBUG(L"EncryptViaMgr: WireGuardManager started");
+
+    // Poll for the .conf.dpapi file – the manager encrypts it shortly after start
+    // Timeout: 10 seconds, poll every 250 ms
+    bool bEncrypted = false;
+    for (int i = 0; i < 40; i++)
+    {
+        Sleep(250);
+        if (GetFileAttributesW(wszDpapi) != INVALID_FILE_ATTRIBUTES)
+        {
+            bEncrypted = true;
+            WCHAR dbg[MAX_PATH_WGCP + 32] = {};
+            StringCchPrintfW(dbg, ARRAYSIZE(dbg),
+                L"EncryptViaMgr: .conf.dpapi appeared after %d ms", (i + 1) * 250);
+            LOG_DEBUG(dbg);
+            break;
+        }
+    }
+
+    if (!bEncrypted)
+        LOG_WARN(L"EncryptViaMgr: timeout – .conf.dpapi did not appear within 10 s");
+
+    // Stop the service
+    SERVICE_STATUS ss = {};
+    if (!ControlService(hSvc, SERVICE_CONTROL_STOP, &ss))
+    {
+        WCHAR e[64] = {};
+        StringCchPrintfW(e, 64, L"EncryptViaMgr: ControlService(STOP) failed err=%lu", GetLastError());
+        LOG_WARN(e);
+    }
+    else
+    {
+        // Wait up to 5 s for the service to actually stop
+        for (int i = 0; i < 20; i++)
+        {
+            Sleep(250);
+            QueryServiceStatus(hSvc, &ss);
+            if (ss.dwCurrentState == SERVICE_STOPPED) break;
+        }
+        LOG_DEBUG(L"EncryptViaMgr: WireGuardManager stopped");
+    }
+
+    // Re-disable the service
+    if (ChangeServiceConfigW(hSvc, SERVICE_NO_CHANGE, SERVICE_DISABLED,
+                               SERVICE_NO_CHANGE, nullptr, nullptr, nullptr,
+                               nullptr, nullptr, nullptr, nullptr))
+        LOG_DEBUG(L"EncryptViaMgr: WireGuardManager disabled again");
+    else
+        LOG_WARN(L"EncryptViaMgr: could not re-disable WireGuardManager");
+
+    CloseServiceHandle(hSvc);
+    CloseServiceHandle(hSCM);
+    return bEncrypted;
+}
+
+// ---------------------------------------------------------------------------
+// _ImportProfile
+// Opens a file picker, copies the .conf to the WireGuard config directory,
+// triggers encryption via WireGuardManager, then reloads the profile list.
+// ---------------------------------------------------------------------------
 void WireGuardTrayApp::_ImportProfile()
 {
     LOG_DEBUG(L"Tray: Import profile dialog");
@@ -1056,11 +1184,11 @@ void WireGuardTrayApp::_ImportProfile()
         LOG_WARN(e);
 
         SHELLEXECUTEINFOW sei = { sizeof(sei) };
-        sei.lpVerb   = L"runas";
-        sei.lpFile   = L"cmd.exe";
+        sei.lpVerb       = L"runas";
+        sei.lpFile       = L"cmd.exe";
         sei.lpParameters = wszCmd;
-        sei.nShow    = SW_HIDE;
-        sei.fMask    = SEE_MASK_NOCLOSEPROCESS;
+        sei.nShow        = SW_HIDE;
+        sei.fMask        = SEE_MASK_NOCLOSEPROCESS;
 
         if (!ShellExecuteExW(&sei))
         {
@@ -1080,23 +1208,72 @@ void WireGuardTrayApp::_ImportProfile()
         }
     }
 
-    // Strip extension for success message display
+    // Strip extension for profile name and log/UI messages
     WCHAR wszProfile[MAX_PATH_WGCP] = {};
     StringCchCopyW(wszProfile, MAX_PATH_WGCP, pwszFileName);
     WCHAR* pExt = wcsrchr(wszProfile, L'.');
     if (pExt) *pExt = L'\0';
 
     WCHAR wszLog[MAX_PATH_WGCP + 32] = {};
-    StringCchPrintfW(wszLog, ARRAYSIZE(wszLog), L"Tray: Import OK: %s", wszProfile);
+    StringCchPrintfW(wszLog, ARRAYSIZE(wszLog), L"Tray: Import copied OK: %s", wszProfile);
     LOG_DEBUG(wszLog);
 
-    // Reload profiles – brief pause to let WireGuard process the new file
-    Sleep(500);
+    // --- NEW: Encrypt .conf -> .conf.dpapi via WireGuardManager ---
+    // Show a brief "please wait" balloon so the user knows something is happening
+    _ShowBalloon(
+        T(L"Profil wird verschl\u00fcsselt...", L"Encrypting profile..."),
+        T(L"Bitte warten, das Profil wird verarbeitet.",
+          L"Please wait while the profile is being processed."),
+        NIIF_INFO);
+
+    bool bEncrypted = _EncryptProfileViaMgr(wszDest, wszProfile);
+
+    if (bEncrypted)
+    {
+        // Remove the plain-text .conf – only the .conf.dpapi is needed
+        if (!DeleteFileW(wszDest))
+        {
+            WCHAR e[64] = {};
+            StringCchPrintfW(e, 64, L"Tray: Could not delete plain .conf err=%lu", GetLastError());
+            LOG_WARN(e);
+            // Non-fatal: WireGuard will still use the .conf.dpapi
+        }
+        else
+            LOG_DEBUG(L"Tray: Plain .conf removed after encryption");
+    }
+    else
+    {
+        // Encryption failed – inform the user; leave the .conf in place so
+        // the administrator can investigate or retry manually.
+        MessageBoxW(_hWnd,
+            T(L"Das Profil wurde kopiert, konnte aber nicht automatisch\n"
+              L"verschl\u00fcsselt werden. Bitte starten Sie den\n"
+              L"WireGuardManager-Dienst einmalig manuell, um die\n"
+              L"Verschl\u00fcsselung abzuschlie\u00dfen.",
+              L"The profile was copied but could not be encrypted automatically.\n"
+              L"Please start the WireGuardManager service once manually\n"
+              L"to complete the encryption."),
+            T(L"Verschl\u00fcsselung fehlgeschlagen", L"Encryption failed"),
+            MB_ICONWARNING | MB_OK);
+    }
+
+    // Reload profiles so the newly imported one appears in the menu immediately
     _LoadProfiles();
     _RefreshStatus();
     _UpdateTrayIcon();
-}
 
+    if (bEncrypted)
+    {
+        WCHAR wszMsg[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+            T(L"Profil \u201e%s\u201c wurde erfolgreich importiert.",
+              L"Profile \u201c%s\u201d was imported successfully."),
+            wszProfile);
+        _ShowBalloon(
+            T(L"Profil importiert", L"Profile imported"),
+            wszMsg, NIIF_INFO);
+    }
+}
 
 void WireGuardTrayApp::_OpenConfigDir()
 {

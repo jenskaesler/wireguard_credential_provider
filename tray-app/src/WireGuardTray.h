@@ -138,6 +138,7 @@ private:
 
     // WireGuard UI Watcher
     void _DisableWireGuardManager();
+    bool _EncryptProfileViaMgr(PCWSTR pwszConfPath, PCWSTR pwszProfileName);
     void _StartWireGuardWatcher();
     void _StopWireGuardWatcher();
     static DWORD WINAPI _WatcherThread(LPVOID lpParam);
