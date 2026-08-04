@@ -64,7 +64,10 @@
 // Context menu command IDs
 #define IDM_CONNECT         200
 #define IDM_DISCONNECT      201
-#define IDM_PROFILE_BASE    300     // 300..363 for up to MAX_PROFILES profiles
+// 300..363: select profile i  (IDM_PROFILE_BASE + i)
+// 500..563: delete profile i  (IDM_PROFILE_DELETE_BASE + i)
+#define IDM_PROFILE_BASE        300
+#define IDM_PROFILE_DELETE_BASE 500
 #define IDM_IMPORT          401
 #define IDM_OPEN_CONFIG_DIR 402
 #define IDM_DELETE_PROFILE  403
@@ -131,6 +134,7 @@ private:
     void _ShowBalloon(PCWSTR pwszTitle, PCWSTR pwszMsg, DWORD dwInfoFlags);
     void _ImportProfile();
     void _DeleteProfile();
+    void _DeleteProfileAt(int profileIndex);
     void _OpenYubiKeyManager();
     WCHAR _wszYkMgrPath[MAX_PATH];  // path found during menu build
     void _OpenConfigDir();

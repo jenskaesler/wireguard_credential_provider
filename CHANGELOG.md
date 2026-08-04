@@ -7,6 +7,57 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.8.3] – 2026-08-04
+
+### Added
+- `WireGuardTray.cpp`: `_EncryptProfileViaMgr()` – after a profile import the
+  WireGuardManager service is started temporarily so it converts the plain
+  `.conf` to `.conf.dpapi`; the service is stopped and re-disabled immediately
+  afterwards. A balloon notification informs the user while encryption is in
+  progress. If the `.conf.dpapi` is not produced within 10 s a warning dialog
+  is shown and the plain `.conf` is left in place for manual recovery.
+- `WireGuardTray.cpp`: `_DeleteProfileAt(int)` – dedicated delete function that
+  accepts a profile index. Blocks deletion only when the selected profile is
+  actively connected (not globally when any tunnel is up). Includes elevated
+  fallback via `ShellExecuteExW` with `runas` verb, adjusts `_nSelectedProfile`
+  correctly when a preceding or the active profile is removed, and shows a
+  balloon notification on success.
+- `WireGuardTray.h`: declarations for `_EncryptProfileViaMgr` and
+  `_DeleteProfileAt`; `IDM_PROFILE_DELETE_BASE 500` constant for the per-profile
+  delete command range (500–563, parallel to `IDM_PROFILE_BASE` 300–363).
+
+### Changed
+- `WireGuardTray.cpp` – context menu restructured:
+  - **Header** collapsed from two lines ("Verbunden" + active profile) into a
+    single two-line block: line 1 = `🔒  WireGuard VPN` (app title), line 2 =
+    `Status: Verbunden  |  Profil: <name>` (bilingual).
+  - **Per-profile submenus**: each profile entry now expands into a submenu.
+    Active + connected → `⏹ Trennen / Disconnect` + greyed-out delete.
+    Active + disconnected or inactive → `▶ Aktivieren / Activate` + enabled
+    delete (`🗑 Löschen / Delete`). Parent entry uses native `MF_CHECKED`
+    checkmark for the active profile; no icon prefix in parent label.
+  - Global top-level **Connect / Disconnect** entry removed (action moved into
+    per-profile submenus).
+  - Global top-level **Delete profile** entry removed (action moved into
+    per-profile submenus as `IDM_PROFILE_DELETE_BASE + i`).
+- `WireGuardTray.cpp`: `_DeleteProfile()` refactored into a thin legacy wrapper
+  that delegates to `_DeleteProfileAt(_nSelectedProfile)`.
+- `WireGuardTray.cpp`: `_ImportProfile()` calls `_EncryptProfileViaMgr()` after
+  copying the `.conf`, deletes the plain file on success, and invokes
+  `_LoadProfiles()` / `_RefreshStatus()` / `_UpdateTrayIcon()` only after
+  encryption – ensuring the new profile is immediately visible in the menu.
+
+### Fixed
+- Profile import: imported `.conf` files were not encrypted because
+  WireGuardManager was disabled; plain `.conf` remained unreadable by the
+  Credential Provider.
+- Profile import: tray menu was refreshed before the `.conf.dpapi` existed,
+  so newly imported profiles did not appear until the next tray restart.
+- Profile delete: deletion was blocked for **all** profiles whenever any tunnel
+  was connected; corrected to block only the profile that is actively connected.
+
+---
+
 ## [2026.8.2] – 2026-08-03
 
 ### Fixed

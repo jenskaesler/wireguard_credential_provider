@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
 [![Language](https://img.shields.io/badge/Language-C%2B%2B17-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-2026.8.2-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-2026.8.3-blue)](CHANGELOG.md)
 [![WireGuard](https://img.shields.io/badge/WireGuard-Windows-88171A?logo=wireguard&logoColor=white)](https://www.wireguard.com/install/)
 
 ---
@@ -52,10 +52,10 @@ Authentication flow:
 
 ### Post-Logon (Tray Application)
 - 🖥️ **System tray icon** – color-coded lock icon (green/red) reflecting tunnel state
-- 📋 **Profile management** – multi-profile submenu, active profile shown in menu header
+- 📋 **Profile management** – per-profile submenus with Activate / Disconnect / Delete actions; active profile and connection state shown in menu header
 - 🔒 **WireGuard UI blocker** – detects and silently terminates the WireGuard UI
 - 🔄 **Shortcut watchdog** – automatically removes the WireGuard Start Menu shortcut after updates
-- 📥 **Profile import** – imports `.conf` files into the WireGuard configuration directory
+- 📥 **Profile import** – imports `.conf` files, triggers WireGuardManager briefly to encrypt to `.conf.dpapi`, then removes the plain-text file; tray menu refreshes immediately after import
 - 🌍 **Bilingual** – German and English UI based on the Windows system locale
 - 🌙 **Dark Mode aware** – reads Windows theme preference and applies it to menus
 - 🪪 **YubiKey PIV** – same authentication gate as the pre-logon tile

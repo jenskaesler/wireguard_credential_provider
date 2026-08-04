@@ -369,40 +369,105 @@ void WireGuardTrayApp::_ShowContextMenu()
     HMENU hMenu = CreatePopupMenu();
     if (!hMenu) return;
 
-    // -- Status --
-    WCHAR wszHeader[64] = {};
-    StringCchPrintfW(wszHeader, ARRAYSIZE(wszHeader),
-        _bConnected ? L"\u25CF  %s" : L"\u25CB  %s",
-        T(_bConnected ? L"Verbunden" : L"Getrennt",
-          _bConnected ? L"Connected"  : L"Disconnected"));
-    AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0, wszHeader);
-    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    // -- Line 1: App name with lock icon --
+    AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0,
+        L"\U0001F512  WireGuard VPN");
+    LOG_DEBUG(L"Menu: app title rendered");
 
-    // -- Connect / Disconnect --
-    if (_nProfiles > 0)
+    // -- Line 2: Status + active profile --
+    // Format: "Status: Verbunden  |  Profil: LT260430"
+    //         "Status: Getrennt   |  Profil: LT260430"
+    //         "Status: Getrennt   |  Kein Profil"  (no profiles)
     {
-        if (_bConnected)
-            AppendMenuW(hMenu, MF_STRING, IDM_DISCONNECT,
-                T(L"\u23CF  Trennen", L"\u23CF  Disconnect"));
+        WCHAR wszStatus[MAX_PATH_WGCP + 64] = {};
+        if (_nProfiles > 0)
+        {
+            StringCchPrintfW(wszStatus, ARRAYSIZE(wszStatus),
+                T(L"Status: %s  |  Profil: %s",
+                  L"Status: %s  |  Profile: %s"),
+                T(_bConnected ? L"Verbunden" : L"Getrennt",
+                  _bConnected ? L"Connected" : L"Disconnected"),
+                _rgProfiles[_nSelectedProfile]);
+        }
         else
-            AppendMenuW(hMenu, MF_STRING, IDM_CONNECT,
-                T(L"\u25B6  Verbinden", L"\u25B6  Connect"));
+        {
+            StringCchPrintfW(wszStatus, ARRAYSIZE(wszStatus),
+                T(L"Status: %s  |  Kein Profil",
+                  L"Status: %s  |  No profile"),
+                T(_bConnected ? L"Verbunden" : L"Getrennt",
+                  _bConnected ? L"Connected" : L"Disconnected"));
+            LOG_WARN(L"Menu: no profiles available");
+        }
+        AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0, wszStatus);
+        WCHAR dbg[MAX_PATH_WGCP + 80] = {};
+        StringCchPrintfW(dbg, ARRAYSIZE(dbg),
+            L"Menu: status line '%s'", wszStatus);
+        LOG_DEBUG(dbg);
     }
-    else
-        AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0,
-            T(L"Kein Profil gefunden", L"No profiles found"));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
-    // -- Profile (direkt, kein Submenu) --
+    // -- Profile – je ein Submenu --
+    // Active profile:   [⏹ Trennen/Disconnect]  [🗑 Löschen – disabled]
+    // Inactive profile: [▶ Aktivieren/Activate]  [🗑 Löschen]
     for (int i = 0; i < _nProfiles; i++)
     {
-        UINT uFlags = MF_STRING;
-        if (i == _nSelectedProfile) uFlags |= MF_CHECKED;
+        bool bIsActive    = (i == _nSelectedProfile);
+        bool bIsConnected = bIsActive && _bConnected;
+
+        HMENU hSub = CreatePopupMenu();
+        if (!hSub)
+        {
+            LOG_WARN(L"Menu: CreatePopupMenu for profile submenu failed");
+            continue;
+        }
+
+        if (bIsConnected)
+        {
+            // Active & connected → show Disconnect
+            AppendMenuW(hSub, MF_STRING,
+                IDM_DISCONNECT,
+                T(L"\u23F9  Trennen", L"\u23F9  Disconnect"));
+            LOG_DEBUG(L"Menu: submenu action = Disconnect (active tunnel)");
+        }
+        else
+        {
+            // Inactive or disconnected → show Activate
+            AppendMenuW(hSub, MF_STRING,
+                static_cast<UINT_PTR>(IDM_PROFILE_BASE + i),
+                T(L"\u25B6  Aktivieren", L"\u25B6  Activate"));
+            LOG_DEBUG(L"Menu: submenu action = Activate");
+        }
+
+        // Delete – only enabled when this profile is NOT the active tunnel
+        UINT uDelFlags = MF_STRING;
+        if (bIsConnected) uDelFlags |= MF_GRAYED;
+        AppendMenuW(hSub, uDelFlags,
+            static_cast<UINT_PTR>(IDM_PROFILE_DELETE_BASE + i),
+            T(L"\U0001F5D1  L\u00F6schen", L"\U0001F5D1  Delete"));
+
+        // Parent entry – plain profile name, no icon prefix
+        // Selection state is indicated by MF_CHECKED (native checkmark)
         WCHAR wszProfEntry[MAX_PATH_WGCP + 4] = {};
         StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry),
             L"   %s", _rgProfiles[i]);
+
+        UINT uFlags = MF_POPUP;
+        if (bIsActive) uFlags |= MF_CHECKED;
+
+        {
+            WCHAR dbg[MAX_PATH_WGCP + 96] = {};
+            StringCchPrintfW(dbg, ARRAYSIZE(dbg),
+                L"Menu: profile[%d] '%s' active=%s connected=%s",
+                i, _rgProfiles[i],
+                bIsActive    ? L"yes" : L"no",
+                bIsConnected ? L"yes" : L"no");
+            LOG_DEBUG(dbg);
+        }
+
         AppendMenuW(hMenu, uFlags,
-            static_cast<UINT_PTR>(IDM_PROFILE_BASE + i), wszProfEntry);
+            reinterpret_cast<UINT_PTR>(hSub), wszProfEntry);
+        // hSub ownership transferred to hMenu via MF_POPUP;
+        // DestroyMenu(hMenu) will recursively destroy all submenus.
     }
 
     if (_nProfiles > 0)
@@ -498,10 +563,7 @@ void WireGuardTrayApp::_ShowContextMenu()
         AppendMenuW(hMenu, MF_STRING, IDM_IMPORT,
             T(L"\U0001F4C2  Profil importieren...",
               L"\U0001F4C2  Import profile..."));
-        AppendMenuW(hMenu, MF_STRING | (_bConnected ? MF_GRAYED : 0),
-            IDM_DELETE_PROFILE,
-            T(L"\U0001F5D1  Profil l\u00F6schen...",
-              L"\U0001F5D1  Delete profile..."));
+        // Delete is now inside each profile's submenu (IDM_PROFILE_DELETE_BASE + i)
     }
     else
     {
@@ -966,7 +1028,17 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
         if (uCmd == IDM_CONNECT)        { _Connect(_nSelectedProfile); return 0; }
         if (uCmd == IDM_DISCONNECT)     { _Disconnect();               return 0; }
         if (uCmd == IDM_IMPORT)         { _ImportProfile();            return 0; }
-        if (uCmd == IDM_DELETE_PROFILE) { _DeleteProfile();            return 0; }
+        if (uCmd == IDM_DELETE_PROFILE) { _DeleteProfile();            return 0; } // legacy fallback
+        if (uCmd >= IDM_PROFILE_DELETE_BASE &&
+            uCmd <  static_cast<UINT>(IDM_PROFILE_DELETE_BASE + _nProfiles))
+        {
+            int iDel = static_cast<int>(uCmd - IDM_PROFILE_DELETE_BASE);
+            WCHAR dbg[64] = {};
+            StringCchPrintfW(dbg, 64, L"Tray: delete requested for profile[%d]", iDel);
+            LOG_DEBUG(dbg);
+            _DeleteProfileAt(iDel);
+            return 0;
+        }
         if (uCmd == IDM_OPEN_YKMANAGER) { _OpenYubiKeyManager();       return 0; }
         if (uCmd == IDM_OPEN_CONFIG_DIR){ _OpenConfigDir();            return 0; }
         if (uCmd == IDM_EXIT)
@@ -1738,43 +1810,98 @@ DWORD WINAPI WireGuardTrayApp::_NetworkWatchThread(LPVOID lpParam)
 // ---------------------------------------------------------------------------
 // _DeleteProfile – delete currently selected .conf.dpapi profile
 // ---------------------------------------------------------------------------
-void WireGuardTrayApp::_DeleteProfile()
+// ---------------------------------------------------------------------------
+// _DeleteProfileAt – delete the profile at the given index after confirmation.
+// Called from the submenu "Delete" entry (IDM_PROFILE_DELETE_BASE + i).
+// ---------------------------------------------------------------------------
+void WireGuardTrayApp::_DeleteProfileAt(int profileIndex)
 {
-    if (_nProfiles == 0 || _bConnected) return;
+    if (profileIndex < 0 || profileIndex >= _nProfiles)
+    {
+        WCHAR e[64] = {};
+        StringCchPrintfW(e, 64,
+            L"DeleteProfileAt: index %d out of range (nProfiles=%d)",
+            profileIndex, _nProfiles);
+        LOG_WARN(e);
+        return;
+    }
 
-    PCWSTR pwszProfile = _rgProfiles[_nSelectedProfile];
+    // Only block deletion if THIS profile is the one currently connected.
+    // Other profiles may be deleted freely even while a tunnel is active.
+    bool bThisProfileConnected = (profileIndex == _nSelectedProfile) && _bConnected;
+    if (bThisProfileConnected)
+    {
+        LOG_WARN(L"DeleteProfileAt: rejected – this profile is currently connected");
+        MessageBoxW(_hWnd,
+            T(L"Dieses Profil ist gerade aktiv verbunden.\nBitte trennen Sie zuerst die VPN-Verbindung.",
+              L"This profile is currently connected.\nPlease disconnect the VPN first."),
+            T(L"Profil l\u00F6schen", L"Delete Profile"),
+            MB_ICONWARNING | MB_OK);
+        return;
+    }
+
+    PCWSTR pwszProfile = _rgProfiles[profileIndex];
+
+    {
+        WCHAR dbg[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(dbg, ARRAYSIZE(dbg),
+            L"DeleteProfileAt[%d]: '%s' – awaiting user confirmation",
+            profileIndex, pwszProfile);
+        LOG_DEBUG(dbg);
+    }
 
     // Confirmation dialog
     WCHAR wszMsg[512] = {};
     StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
-        T(L"Profil \"%s\" wirklich l\u00F6schen?\n\nDiese Aktion kann nicht r\u00FCckg\u00E4ngig gemacht werden.",
-          L"Delete profile \"%s\"?\n\nThis action cannot be undone."),
+        T(L"Profil \u201e%s\u201c wirklich l\u00F6schen?\n\nDiese Aktion kann nicht r\u00FCckg\u00E4ngig gemacht werden.",
+          L"Delete profile \u201c%s\u201d?\n\nThis action cannot be undone."),
         pwszProfile);
 
     int iResult = MessageBoxW(_hWnd, wszMsg,
         T(L"Profil l\u00F6schen", L"Delete Profile"),
         MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
-    if (iResult != IDYES) return;
 
-    // Build full path
+    if (iResult != IDYES)
+    {
+        LOG_DEBUG(L"DeleteProfileAt: user cancelled");
+        return;
+    }
+
+    // Build full path of .conf.dpapi
     WCHAR wszConfigDir[MAX_PATH_WGCP] = {};
     WGGetConfigDir(wszConfigDir, MAX_PATH_WGCP);
     WCHAR wszFile[MAX_PATH_WGCP] = {};
     StringCchPrintfW(wszFile, ARRAYSIZE(wszFile),
         L"%s%s.conf.dpapi", wszConfigDir, pwszProfile);
 
-    // Log deletion attempt
     {
-        WCHAR dLog[MAX_PATH_WGCP + 32] = {};
+        WCHAR dLog[MAX_PATH_WGCP + 64] = {};
         StringCchPrintfW(dLog, ARRAYSIZE(dLog),
-            L"DeleteProfile: deleting '%s'", pwszProfile);
+            L"DeleteProfileAt[%d]: deleting '%s'", profileIndex, wszFile);
         LOG_DEBUG(dLog);
     }
 
+    bool bDeleted = false;
+
     // Try direct delete first
-    if (!DeleteFileW(wszFile))
+    if (DeleteFileW(wszFile))
     {
-        LOG_DEBUG(L"DeleteProfile: direct delete failed, retrying elevated");
+        bDeleted = true;
+        WCHAR dOk[MAX_PATH_WGCP + 32] = {};
+        StringCchPrintfW(dOk, ARRAYSIZE(dOk),
+            L"DeleteProfileAt[%d]: '%s' deleted successfully",
+            profileIndex, pwszProfile);
+        LOG_DEBUG(dOk);
+    }
+    else
+    {
+        WCHAR e[64] = {};
+        StringCchPrintfW(e, 64,
+            L"DeleteProfileAt[%d]: direct delete failed err=%lu – retrying elevated",
+            profileIndex, GetLastError());
+        LOG_WARN(e);
+
+        // Fallback: elevated delete via cmd.exe with runas verb
         WCHAR wszCmd[MAX_PATH_WGCP + 32] = {};
         StringCchPrintfW(wszCmd, ARRAYSIZE(wszCmd), L"/C del /F /Q \"%s\"", wszFile);
         SHELLEXECUTEINFOW sei = { sizeof(sei) };
@@ -1782,16 +1909,70 @@ void WireGuardTrayApp::_DeleteProfile()
         sei.lpFile       = L"cmd.exe";
         sei.lpParameters = wszCmd;
         sei.nShow        = SW_HIDE;
-        if (!ShellExecuteExW(&sei))
-            LOG_WARN(L"DeleteProfile: elevated delete also failed");
-        Sleep(500);
+        sei.fMask        = SEE_MASK_NOCLOSEPROCESS;
+
+        if (ShellExecuteExW(&sei))
+        {
+            if (sei.hProcess)
+            {
+                WaitForSingleObject(sei.hProcess, 5000);
+                CloseHandle(sei.hProcess);
+            }
+            Sleep(300);
+            // Verify the file is gone
+            if (GetFileAttributesW(wszFile) == INVALID_FILE_ATTRIBUTES)
+            {
+                bDeleted = true;
+                WCHAR dElev[MAX_PATH_WGCP + 48] = {};
+                StringCchPrintfW(dElev, ARRAYSIZE(dElev),
+                    L"DeleteProfileAt[%d]: '%s' deleted via elevated cmd",
+                    profileIndex, pwszProfile);
+                LOG_DEBUG(dElev);
+            }
+            else
+            {
+                WCHAR e2[MAX_PATH_WGCP + 48] = {};
+                StringCchPrintfW(e2, ARRAYSIZE(e2),
+                    L"DeleteProfileAt[%d]: elevated delete ran but file still exists: '%s'",
+                    profileIndex, wszFile);
+                LOG_CRIT(e2);
+            }
+        }
+        else
+        {
+            WCHAR e2[64] = {};
+            StringCchPrintfW(e2, 64,
+                L"DeleteProfileAt[%d]: elevated delete ShellExecuteEx failed err=%lu",
+                profileIndex, GetLastError());
+            LOG_CRIT(e2);
+        }
     }
-    else
+
+    if (!bDeleted)
     {
-        WCHAR dOk[MAX_PATH_WGCP + 32] = {};
-        StringCchPrintfW(dOk, ARRAYSIZE(dOk),
-            L"DeleteProfile: '%s' deleted successfully", pwszProfile);
-        LOG_DEBUG(dOk);
+        MessageBoxW(_hWnd,
+            T(L"Das Profil konnte nicht gel\u00F6scht werden.\nBitte pr\u00FCfen Sie die Berechtigungen.",
+              L"The profile could not be deleted.\nPlease check the permissions."),
+            T(L"Fehler", L"Error"),
+            MB_ICONERROR | MB_OK);
+        LOG_CRIT(L"DeleteProfileAt: deletion failed – aborting reload");
+        return;
+    }
+
+    // If we just deleted the currently active profile, reset selection
+    if (profileIndex == _nSelectedProfile)
+    {
+        LOG_DEBUG(L"DeleteProfileAt: deleted profile was active – resetting selection to 0");
+        _nSelectedProfile = 0;
+    }
+    else if (profileIndex < _nSelectedProfile)
+    {
+        // Shift selection down to keep the same profile active
+        _nSelectedProfile--;
+        WCHAR dbg2[64] = {};
+        StringCchPrintfW(dbg2, 64,
+            L"DeleteProfileAt: shifted _nSelectedProfile to %d", _nSelectedProfile);
+        LOG_DEBUG(dbg2);
     }
 
     Sleep(300);
@@ -1799,14 +1980,30 @@ void WireGuardTrayApp::_DeleteProfile()
     _RefreshStatus();
     _UpdateTrayIcon();
 
+    {
+        WCHAR dbgDone[MAX_PATH_WGCP + 32] = {};
+        StringCchPrintfW(dbgDone, ARRAYSIZE(dbgDone),
+            L"DeleteProfileAt: reload complete, nProfiles now %d", _nProfiles);
+        LOG_DEBUG(dbgDone);
+    }
+
     WCHAR wszDone[256] = {};
     StringCchPrintfW(wszDone, ARRAYSIZE(wszDone),
-        T(L"Profil \"%s\" wurde gel\u00F6scht.",
-          L"Profile \"%s\" has been deleted."),
+        T(L"Profil \u201e%s\u201c wurde gel\u00F6scht.",
+          L"Profile \u201c%s\u201d has been deleted."),
         pwszProfile);
-    MessageBoxW(_hWnd, wszDone,
+    _ShowBalloon(
         T(L"Profil gel\u00F6scht", L"Profile deleted"),
-        MB_OK | MB_ICONINFORMATION);
+        wszDone, NIIF_INFO);
+}
+
+// ---------------------------------------------------------------------------
+// _DeleteProfile – legacy wrapper, deletes currently selected profile.
+// ---------------------------------------------------------------------------
+void WireGuardTrayApp::_DeleteProfile()
+{
+    LOG_DEBUG(L"DeleteProfile: legacy call -> delegating to _DeleteProfileAt(_nSelectedProfile)");
+    _DeleteProfileAt(_nSelectedProfile);
 }
 
 // ---------------------------------------------------------------------------
