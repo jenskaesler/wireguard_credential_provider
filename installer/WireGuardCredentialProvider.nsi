@@ -94,9 +94,8 @@ Unicode true
 !define MUI_HEADERIMAGE_UNBITMAP "content\img\header.bmp"
 !define MUI_HEADERIMAGE_RIGHT
 
-!define MUI_FINISHPAGE_NOAUTOCLOSE
-!define MUI_FINISHPAGE_NOREBOOTSUPPORT
 !define MUI_FINISHPAGE_TEXT_LARGE
+!define MUI_FINISHPAGE_REBOOTLATER_DEFAULT
 !define MUI_FINISHPAGE_LINK          "GitHub Repository"
 !define MUI_FINISHPAGE_LINK_LOCATION "${ABOUTURL}"
 !define MUI_FINISHPAGE_SHOWREADME        "$INSTDIR\docs\LICENSE.txt"
@@ -164,6 +163,7 @@ LangString MSG_YKAUTH_OK        ${LANG_GERMAN} "YubiKey Authenticator erfolgreic
 LangString MSG_YKMINI_DL        ${LANG_GERMAN} "Lade YubiKey Minidriver herunter..."
 LangString MSG_YKMINI_INST      ${LANG_GERMAN} "Installiere YubiKey Minidriver..."
 LangString MSG_YKMINI_OK        ${LANG_GERMAN} "YubiKey Minidriver erfolgreich installiert."
+LangString MSG_YKMINI_REBOOT    ${LANG_GERMAN} "Der YubiKey Minidriver erfordert einen Neustart des Systems."
 LangString MSG_YKMGRCLI_DL      ${LANG_GERMAN} "Lade YubiKey Manager CLI herunter..."
 LangString MSG_YKMGRCLI_INST    ${LANG_GERMAN} "Installiere YubiKey Manager CLI..."
 LangString MSG_YKMGRCLI_OK      ${LANG_GERMAN} "YubiKey Manager CLI erfolgreich installiert."
@@ -202,6 +202,7 @@ LangString MSG_YKAUTH_OK        ${LANG_ENGLISH} "YubiKey Authenticator installed
 LangString MSG_YKMINI_DL        ${LANG_ENGLISH} "Downloading YubiKey Minidriver..."
 LangString MSG_YKMINI_INST      ${LANG_ENGLISH} "Installing YubiKey Minidriver..."
 LangString MSG_YKMINI_OK        ${LANG_ENGLISH} "YubiKey Minidriver installed successfully."
+LangString MSG_YKMINI_REBOOT    ${LANG_ENGLISH} "The YubiKey Minidriver requires a system restart."
 LangString MSG_YKMGRCLI_DL      ${LANG_ENGLISH} "Downloading YubiKey Manager CLI..."
 LangString MSG_YKMGRCLI_INST    ${LANG_ENGLISH} "Installing YubiKey Manager CLI..."
 LangString MSG_YKMGRCLI_OK      ${LANG_ENGLISH} "YubiKey Manager CLI installed successfully."
@@ -299,10 +300,29 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
 
         DetailPrint "Vorbereitung der Installation..."
         ExecWait 'regsvr32.exe /s /u "$9\WireGuardCredentialProvider.dll"'
-        ExecWait 'taskkill.exe /F /IM LogonUI.exe'
-        ExecWait 'taskkill.exe /F /IM WireGuardCPTray.exe'
-        ExecWait 'taskkill.exe /F /IM WireGuardShutdownService.exe'
-        Sleep 1500
+
+        ; WireGuardCPTray beenden und aktiv auf das Prozessende warten.
+        ; Exec (ohne Wait) wuerde die Datei noch gesperrt lassen wenn File() laeuft.
+        ${nsProcess::KillProcess} "WireGuardCPTray.exe" $R0
+        ${nsProcess::KillProcess} "WireGuardShutdownService.exe" $R0
+
+        ; Aktiv warten bis WireGuardCPTray.exe wirklich weg ist (max. 10 s)
+        StrCpy $R1 0
+        ${Do}
+            Sleep 250
+            ${nsProcess::FindProcess} "WireGuardCPTray.exe" $R0
+            ${If} $R0 == 0
+                ; Prozess noch da – weiter warten
+                IntOp $R1 $R1 + 1
+            ${Else}
+                ; Prozess beendet
+                StrCpy $R1 41  ; Schleife verlassen
+            ${EndIf}
+        ${LoopUntil} $R1 > 40  ; 40 * 250ms = 10 s Timeout
+
+        ; LogonUI.exe laeuft als SYSTEM/PPL - taskkill /F haengt oder schlaegt fehl.
+        ; LogonUI wird nach DLL-Austausch beim naechsten Winlogon-Zyklus neu geladen.
+        Sleep 500
 
         ; -------------------------------------------------------
         ; Dateien installieren
@@ -490,11 +510,15 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
             DetailPrint "Migriert: HandshakeTimeoutSec DWORD -> REG_SZ ($R0)"
         ${EndIf}
 
-        ; Neue Keys seit letztem Release - immer prüfen und ggf. anlegen
+        ; HandshakeTimeoutSec: immer auf 180 setzen wenn 0 oder nicht vorhanden.
+        ; Liest als REG_SZ (nach der Migration oben) und als Fallback ReadRegDWORD.
+        ; Wird auch bei Updates erzwungen, da 0 = deaktiviert = falscher Default.
         ClearErrors
-        ReadRegDWORD $R0 HKLM "${REG_WGCP}" "HandshakeTimeoutSec"
+        ReadRegStr $R0 HKLM "${REG_WGCP}" "HandshakeTimeoutSec"
         ${If} $R0 == ""
-            WriteRegStr   HKLM "${REG_WGCP}" "HandshakeTimeoutSec" "0"
+        ${OrIf} $R0 == "0"
+            WriteRegStr HKLM "${REG_WGCP}" "HandshakeTimeoutSec" "180"
+            DetailPrint "HandshakeTimeoutSec auf 180 gesetzt."
         ${EndIf}
 
         ; Weitere Werte nur beim Erstinstall (Benutzereinstellungen erhalten)
@@ -517,7 +541,7 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
             WriteRegDWORD HKLM "${REG_WGCP}" "SmartcardDisconnectOnRemove" 0
             WriteRegStr   HKLM "${REG_WGCP}" "SmartcardReaderName"         ""
             WriteRegStr   HKLM "${REG_WGCP}" "SmartcardCertThumbprint"     ""
-            WriteRegStr   HKLM "${REG_WGCP}" "HandshakeTimeoutSec"         "0"
+            WriteRegStr   HKLM "${REG_WGCP}" "HandshakeTimeoutSec"         "180"
             DetailPrint "Standard-Konfiguration geschrieben."
         ${Else}
             DetailPrint "Bestehende Konfiguration beibehalten."
@@ -615,6 +639,8 @@ SectionGroup "$(GRP_YUBIKEY)" SecGrpYubiKey
             ExecWait 'msiexec.exe /i "$TEMP\yubikey-minidriver.msi" /qn /norestart'
             Delete "$TEMP\yubikey-minidriver.msi"
             DetailPrint "$(MSG_YKMINI_OK)"
+            DetailPrint "$(MSG_YKMINI_REBOOT)"
+            SetRebootFlag true
         ${Else}
             MessageBox MB_OK|MB_ICONEXCLAMATION "$(MSG_YK_ERR)$\n${YUBIKEY_MINI_URL}"
         ${EndIf}
@@ -652,7 +678,17 @@ SectionGroup /e "un.${APPNAME}" SecGrpUninstall
         ${DisableX64FSRedirection}
 
         DetailPrint "$(MSG_SVC_STOP)"
-        ExecWait 'taskkill.exe /F /IM WireGuardCPTray.exe'
+        ${nsProcess::KillProcess} "WireGuardCPTray.exe" $R0
+        StrCpy $R1 0
+        ${Do}
+            Sleep 250
+            ${nsProcess::FindProcess} "WireGuardCPTray.exe" $R0
+            ${If} $R0 == 0
+                IntOp $R1 $R1 + 1
+            ${Else}
+                StrCpy $R1 41
+            ${EndIf}
+        ${LoopUntil} $R1 > 40
         DetailPrint "Entferne Tray-App Autostart..."
         ; Remove any legacy autostart entries
         DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "WireGuardCPTray"

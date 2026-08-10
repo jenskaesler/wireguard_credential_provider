@@ -104,6 +104,11 @@ private:
     DWORD   _dwPinAttempts;         // Failed attempts since last success
     WCHAR   _wszCurrentReader[256]; // Reader in which a card was last detected
 
+    // Corporate-network detection: timestamp (GetTickCount) of last block event.
+    // _RefreshStatus() skips overwriting _wszStatus for 5 s after detection
+    // so the user has time to read the message before the auto-refresh clears it.
+    DWORD   _dwCorpNetBlockedTick;
+
     // Auto-connect/disconnect threads
     HANDLE          _hTimerThread;
     volatile bool   _bStopTimer;

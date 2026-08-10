@@ -12,6 +12,7 @@ WireGuardCredential::WireGuardCredential()
     , _bSelected(false), _hTimerThread(nullptr), _bStopTimer(false)
     , _pProvider(nullptr)
     , _dwPinAttempts(0), _hScWatchThread(nullptr), _bStopScWatch(false)
+    , _dwCorpNetBlockedTick(0)
 {
     ZeroMemory(_rgCredProvFieldDescriptors, sizeof(_rgCredProvFieldDescriptors));
     ZeroMemory(_rgFieldStatePairs,          sizeof(_rgFieldStatePairs));
@@ -212,6 +213,16 @@ void WireGuardCredential::_RefreshStatus()
         return;
     }
 
+    // Corporate-Network-Meldung fuer mindestens 5 Sekunden stehen lassen,
+    // damit der Benutzer sie lesen kann, bevor der Auto-Refresh ueberschreibt.
+    if (_dwCorpNetBlockedTick != 0 &&
+        (GetTickCount() - _dwCorpNetBlockedTick) < 5000)
+    {
+        LOG_DEBUG(L"RefreshStatus: corporate message hold-off active");
+        return;
+    }
+    _dwCorpNetBlockedTick = 0;  // Schutz abgelaufen
+
     PCWSTR pwszProfile = _rgProfiles[_dwSelectedProfile];
     _bConnected = WGIsTunnelConnected(pwszProfile);
 
@@ -298,11 +309,11 @@ HRESULT WireGuardCredential::_LoadBitmap(PCWSTR pwszPath, HBITMAP* phbmp)
         if (hBmp)
         {
             *phbmp = hBmp;
-            LOG_DEBUG(_bConnected ? L"Icon aus Ressource: connected" : L"Icon aus Ressource: disconnected");
             return S_OK;
         }
-        WCHAR e[64]={};
-        StringCchPrintfW(e, 64, L"Resource %u not found, error=%lu", uResId, GetLastError());
+        WCHAR e[96]={};
+        StringCchPrintfW(e, 96, L"CP: Embedded icon resource %u not found (err=%lu) - trying registry path",
+                         uResId, GetLastError());
         LOG_WARN(e);
     }
 
@@ -315,11 +326,11 @@ HRESULT WireGuardCredential::_LoadBitmap(PCWSTR pwszPath, HBITMAP* phbmp)
         if (hBmp)
         {
             *phbmp = hBmp;
-            LOG_DEBUG(L"Icon aus Datei geladen");
             return S_OK;
         }
         WCHAR e[MAX_PATH_WGCP+64]={};
-        StringCchPrintfW(e, ARRAYSIZE(e), L"LoadImage file err=%lu: %s", GetLastError(), pwszPath);
+        StringCchPrintfW(e, ARRAYSIZE(e),
+            L"CP: Failed to load icon from registry path '%s' err=%lu", pwszPath, GetLastError());
         LOG_WARN(e);
     }
 
@@ -419,7 +430,6 @@ DWORD WINAPI WireGuardCredential::_TimerThreadProc(LPVOID lpParam)
 
         pThis->_RefreshStatus();
         pThis->_UpdateFields();
-        LOG_DEBUG(L"Auto-refresh: status updated");
     }
     return 0;
 }
@@ -498,7 +508,6 @@ STDMETHODIMP WireGuardCredential::GetBitmapValue(DWORD dwFieldID, HBITMAP* phbmp
 {
     *phbmp = nullptr;
     if (dwFieldID != FI_TILEIMAGE) return E_INVALIDARG;
-    LOG_DEBUG(_bConnected ? L"GetBitmapValue: connected icon" : L"GetBitmapValue: disconnected icon");
     return _LoadBitmap(_bConnected ? _wszIconConn : _wszIconDisconn, phbmp);
 }
 
@@ -511,7 +520,6 @@ STDMETHODIMP WireGuardCredential::GetComboBoxValueCount(
     if (dwFieldID != FI_PROFILE) return E_INVALIDARG;
     *pcItems         = static_cast<DWORD>(_nProfiles);
     *pdwSelectedItem = _dwSelectedProfile;
-    WCHAR d[64]={}; StringCchPrintfW(d,64,L"ComboBox: %d Items",_nProfiles); LOG_DEBUG(d);
     return S_OK;
 }
 
@@ -596,10 +604,6 @@ LOG_DEBUG(L"SC: Starting authentication");
     }
 
     WGCPScResult result = WGCPAuthenticateSmartcard(_scConfig, _wszPin);
-    {
-        char szR[64]={};
-        wsprintfA(szR,"DoSmartcardAuth: result=%d",(int)result);
-        }
 
     // Immediately erase PIN from memory
     SecureZeroMemory(_wszPin, sizeof(_wszPin));
@@ -681,7 +685,9 @@ DWORD WINAPI WireGuardCredential::_ScWatchThreadProc(LPVOID lpParam)
         {
             // Karte wurde eingesteckt
             StringCchCopyW(pThis->_wszCurrentReader, 256, wszReader);
-            LOG_DEBUG(L"SC-Watch: Card inserted");
+            WCHAR dIns[320] = {};
+            StringCchPrintfW(dIns, ARRAYSIZE(dIns), L"SC-Watch: Card inserted in reader '%s'", wszReader);
+            LOG_DEBUG(dIns);
 
             if (pThis->_scConfig.bConnectOnInsert &&
                 !pThis->_bConnected && pThis->_nProfiles > 0)
@@ -740,17 +746,19 @@ DWORD WINAPI WireGuardCredential::_ScWatchThreadProc(LPVOID lpParam)
             }
         }
 
-        // Handshake timeout: disconnect if last handshake is too old
+        // Handshake timeout: disconnect if last handshake is too old.
+        // llAge == -1 means wg.exe failed or no handshake yet – do NOT disconnect.
         if (pThis->_bConnected && pThis->_dwHandshakeTimeoutSec > 0)
         {
             PCWSTR pwszProf = pThis->_rgProfiles[pThis->_dwSelectedProfile];
             LONGLONG llAge = WGGetLastHandshakeSec(pThis->_wszWgExePath, pwszProf);
-            if (llAge > static_cast<LONGLONG>(pThis->_dwHandshakeTimeoutSec))
+            if (llAge != -1 &&
+                llAge > static_cast<LONGLONG>(pThis->_dwHandshakeTimeoutSec))
             {
-                WCHAR d[128] = {};
-                StringCchPrintfW(d, 128,
-                    L"Handshake timeout: last handshake %lld s ago (limit %lu s) - disconnecting tunnel",
-                    llAge, pThis->_dwHandshakeTimeoutSec);
+                WCHAR d[160] = {};
+                StringCchPrintfW(d, ARRAYSIZE(d),
+                    L"CP Handshake timeout: last handshake %lld s ago (limit %lu s) - disconnecting '%s'",
+                    llAge, pThis->_dwHandshakeTimeoutSec, pwszProf);
                 LOG_CRIT(d);
                 WGDisconnect(pThis->_wszExePath, pwszProf);
             }
@@ -807,8 +815,20 @@ if (dwFieldID != FI_BUTTON || _nProfiles == 0) return S_OK;
         if (WGCPIsOnCorporateNetwork())
         {
             LOG_DEBUG(L"CLC: Corporate network detected - connect blocked");
-            _UpdateScStatus(
-                L"\U0001F3E2 Corporate network \u2013 VPN not needed");
+
+            // Timestamp setzen: verhindert, dass der Auto-Refresh die Meldung
+            // fuer 5 Sekunden ueberschreibt (Mindest-Anzeigedauer fuer den User)
+            _dwCorpNetBlockedTick = GetTickCount();
+
+            // FI_STATUS: immer sichtbar (unabhaengig von Smartcard-Konfiguration)
+            StringCchCopyW(_wszStatus, MAX_LABEL_WGCP,
+                           L"\U0001F3E2 Firmennetz \u2013 kein VPN erforderlich");
+            if (_pCredProvCredentialEvents)
+                _pCredProvCredentialEvents->SetFieldString(this, FI_STATUS, _wszStatus);
+
+            // FI_SC_STATUS: zusaetzlich fuer Smartcard-Nutzer
+            _UpdateScStatus(L"\U0001F3E2 Firmennetz \u2013 kein VPN erforderlich");
+
             _UpdateFields();
             return S_OK;
         }

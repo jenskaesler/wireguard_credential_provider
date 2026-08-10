@@ -62,9 +62,10 @@
 #define TIMER_REFRESH_MS    5000    // 5 s auto-refresh (matches CP tile)
 
 // Context menu command IDs
-#define IDM_CONNECT         200
-#define IDM_DISCONNECT      201
-// 300..363: select profile i  (IDM_PROFILE_BASE + i)
+#define IDM_CONNECT             200
+#define IDM_DISCONNECT          201
+#define IDM_CONNECT_TOGGLE      202  // Linksklick: verbinden wenn getrennt, trennen wenn verbunden
+// 300..363: select profile i without connecting (IDM_PROFILE_BASE + i)
 // 500..563: delete profile i  (IDM_PROFILE_DELETE_BASE + i)
 #define IDM_PROFILE_BASE        300
 #define IDM_PROFILE_DELETE_BASE 500
@@ -125,13 +126,14 @@ private:
     void _UpdateTrayIcon();
     void _ShowContextMenu();
     void _Connect(int profileIndex);
+    void _SelectProfile(int profileIndex);  // Profil aktiv setzen OHNE Verbinden
     void _Disconnect();
     bool _DoSmartcardAuth();
     bool _ShowPinDialog();
     void _AddTrayIcon();
     void _RemoveTrayIcon();
     void _UpdateTrayTooltip();
-    void _ShowBalloon(PCWSTR pwszTitle, PCWSTR pwszMsg, DWORD dwInfoFlags);
+    void _ShowBalloon(PCWSTR pwszTitle, PCWSTR pwszMsg, DWORD dwInfoFlags, DWORD dwTimeout = 4000);
     void _ImportProfile();
     void _DeleteProfile();
     void _DeleteProfileAt(int profileIndex);

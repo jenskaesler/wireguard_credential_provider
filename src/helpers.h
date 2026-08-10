@@ -23,6 +23,8 @@
 #include <iphlpapi.h>    // GetAdaptersAddresses, IP_ADAPTER_ADDRESSES
 #include <comdef.h>     // _com_ptr_t  // DATA_BLOB, CryptProtectData, CryptUnprotectData
 #include <dpapi.h>     // CRYPTPROTECT_LOCAL_MACHINE
+#include <lmcons.h>    // DNLEN, required before dsgetdc.h
+#include <dsgetdc.h>   // DsGetDcNameW, DOMAIN_CONTROLLER_INFOW, DS_FORCE_REDISCOVERY
 
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "crypt32.lib")
@@ -132,130 +134,6 @@ struct FIELD_STATE_PAIR
 };
 #endif // WGCP_TRAY_BUILD
 
-// ---------------------------------------------------------------------------
-// Network Location Awareness
-// Returns true when the machine has an active domain-authenticated network
-// connection – i.e. it is physically inside the corporate network.
-// Uses INetworkListManager (NLA) which is available from Vista onwards.
-// WireGuard interfaces are excluded to prevent false positives when the
-// VPN tunnel reaches a DC (which would cause an infinite disconnect loop).
-// ---------------------------------------------------------------------------
-inline bool WGCPIsOnCorporateNetwork()
-{
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    bool bCoInit = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
-
-    bool bCorporate = false;
-    INetworkListManager* pNLM = nullptr;
-    hr = CoCreateInstance(CLSID_NetworkListManager, nullptr,
-                          CLSCTX_ALL, IID_INetworkListManager,
-                          reinterpret_cast<void**>(&pNLM));
-    if (SUCCEEDED(hr) && pNLM)
-    {
-        IEnumNetworks* pEnum = nullptr;
-        if (SUCCEEDED(pNLM->GetNetworks(NLM_ENUM_NETWORK_CONNECTED, &pEnum)) && pEnum)
-        {
-            INetwork* pNet = nullptr;
-            while (pEnum->Next(1, &pNet, nullptr) == S_OK)
-            {
-                // Skip WireGuard virtual adapters to avoid false positives
-                // when VPN tunnel reaches a DC (would cause disconnect loop)
-                bool bIsWireGuard = false;
-                IEnumNetworkConnections* pConnEnum = nullptr;
-                if (SUCCEEDED(pNet->GetNetworkConnections(&pConnEnum)) && pConnEnum)
-                {
-                    INetworkConnection* pConn = nullptr;
-                    while (pConnEnum->Next(1, &pConn, nullptr) == S_OK)
-                    {
-                        GUID adapterGuid = {};
-                        if (SUCCEEDED(pConn->GetAdapterId(&adapterGuid)))
-                        {
-                            // Identify WireGuard adapters:
-                            // Get adapter friendly name via GetAdaptersAddresses,
-                            // then check if WireGuardTunnel$<name> service exists.
-                            // This is reliable because WireGuard always creates a
-                            // service named exactly WireGuardTunnel$<profile>.
-                            WCHAR wszGuid[64] = {};
-                            StringFromGUID2(adapterGuid, wszGuid, 64);
-
-                            // Get friendly name for this adapter GUID
-                            WCHAR wszFriendly[256] = {};
-                            ULONG ulSize = 0;
-                            GetAdaptersAddresses(AF_UNSPEC,
-                                GAA_FLAG_SKIP_UNICAST|GAA_FLAG_SKIP_DNS_SERVER,
-                                nullptr, nullptr, &ulSize);
-                            IP_ADAPTER_ADDRESSES* pAddrs =
-                                static_cast<IP_ADAPTER_ADDRESSES*>(malloc(ulSize));
-                            if (pAddrs && GetAdaptersAddresses(AF_UNSPEC,
-                                GAA_FLAG_SKIP_UNICAST|GAA_FLAG_SKIP_DNS_SERVER,
-                                nullptr, pAddrs, &ulSize) == NO_ERROR)
-                            {
-                                for (auto* p = pAddrs; p; p = p->Next)
-                                {
-                                    // Match by AdapterName (= GUID string)
-                                    WCHAR wszA[64] = {};
-                                    MultiByteToWideChar(CP_ACP, 0,
-                                        p->AdapterName, -1, wszA, 64);
-                                    if (_wcsicmp(wszA, wszGuid) == 0)
-                                    {
-                                        StringCchCopyW(wszFriendly, 256,
-                                            p->FriendlyName);
-                                        break;
-                                    }
-                                }
-                            }
-                            if (pAddrs) free(pAddrs);
-
-                            // Check if WireGuardTunnel$<FriendlyName> service exists
-                            if (wszFriendly[0])
-                            {
-                                WCHAR wszSvcName[256] = {};
-                                StringCchPrintfW(wszSvcName, 256,
-                                    L"WireGuardTunnel$%s", wszFriendly);
-                                SC_HANDLE hSCM = OpenSCManagerW(nullptr, nullptr,
-                                                                  SC_MANAGER_CONNECT);
-                                if (hSCM)
-                                {
-                                    SC_HANDLE hSvc = OpenServiceW(hSCM, wszSvcName,
-                                                                   SERVICE_QUERY_STATUS);
-                                    if (hSvc)
-                                    {
-                                        bIsWireGuard = true;
-                                        CloseServiceHandle(hSvc);
-                                    }
-                                    CloseServiceHandle(hSCM);
-                                }
-                            }
-                        }
-                        pConn->Release();
-                        if (bIsWireGuard) break;
-                    }
-                    pConnEnum->Release();
-                }
-
-                if (!bIsWireGuard)
-                {
-                    NLM_NETWORK_CATEGORY cat = NLM_NETWORK_CATEGORY_PUBLIC;
-                    if (SUCCEEDED(pNet->GetCategory(&cat)) &&
-                        cat == NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED)
-                    {
-                        bCorporate = true;
-                        pNet->Release();
-                        break;
-                    }
-                }
-                pNet->Release();
-            }
-            pEnum->Release();
-        }
-        pNLM->Release();
-    }
-
-    if (bCoInit && SUCCEEDED(hr)) CoUninitialize();
-    return bCorporate;
-}
-
-// ---------------------------------------------------------------------------
 // Registry helpers
 // ---------------------------------------------------------------------------
 inline void ReadRegString(HKEY hKey, PCWSTR pwszValue,
@@ -314,7 +192,13 @@ inline void WGGetConfigDir(WCHAR* pwszOut, DWORD cchOut)
 
     // Last resort fallback if InstallDir is also empty
     if (pwszOut[0] == L'\0')
+    {
+        // Emergency fallback – wird im Normalfall nie erreicht.
+        // Kein LOG_WARN hier da WGCPLog/LOG_WARN erst nach dieser Funktion
+        // definiert wird. Der Fallback-Pfad wird durch das spätere Logging
+        // in den aufrufenden Funktionen sichtbar.
         StringCchCopyW(pwszOut, cchOut, L"C:\\Windows\\Temp\\wgcp_configurations");
+    }
 
     // Ensure trailing backslash
     size_t len = wcslen(pwszOut);
@@ -510,6 +394,429 @@ inline void WGCPLog(DWORD dwLevel, PCWSTR pwszMsg)
 #define LOG_DEBUG(msg) WGCPLog(WGCP_LOG_DEBUG, (msg))
 
 // ---------------------------------------------------------------------------
+// Network Location Awareness
+// Returns true when the machine has an active domain-authenticated network
+// connection – i.e. it is physically inside the corporate network.
+//
+// Two-stage detection:
+//   Stage 1 (Primary): NLA reports DOMAIN_AUTHENTICATED for the network.
+//   Stage 2 (Fallback): PC is domain-joined AND DsGetDcName finds a DC on the
+//     LAN – catches the common VM case (Red Hat VirtIO, Hyper-V) where NLA
+//     only reports PRIVATE instead of DOMAIN_AUTHENTICATED because the DC was
+//     not reachable when NLA first classified the network after boot.
+//
+// WireGuard interfaces are excluded from both stages.
+// ---------------------------------------------------------------------------
+inline bool WGCPIsOnCorporateNetwork()
+{
+    HRESULT hrCo = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    bool bNeedCoUninit = (SUCCEEDED(hrCo) && hrCo != S_FALSE);
+    if (hrCo == RPC_E_CHANGED_MODE) bNeedCoUninit = false;
+
+    bool bCorporate = false;
+
+    INetworkListManager* pNLM = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_NetworkListManager, nullptr,
+                                  CLSCTX_ALL, IID_INetworkListManager,
+                                  reinterpret_cast<void**>(&pNLM));
+    if (FAILED(hr) || !pNLM)
+    {
+        WCHAR e[64] = {};
+        StringCchPrintfW(e, 64, L"CorpNet: CoCreateInstance(NLM) failed hr=0x%08X", hr);
+        LOG_WARN(e);
+        if (bNeedCoUninit) CoUninitialize();
+        return false;
+    }
+
+    // Build WireGuard adapter GUID set (used by both stages)
+    WCHAR wszWgGuids[64][64] = {};
+    int   nWgGuids = 0;
+    {
+        ULONG ulSize = 0;
+        GetAdaptersAddresses(AF_UNSPEC,
+            GAA_FLAG_SKIP_UNICAST | GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_MULTICAST,
+            nullptr, nullptr, &ulSize);
+        if (ulSize > 0)
+        {
+            IP_ADAPTER_ADDRESSES* pAddrs =
+                static_cast<IP_ADAPTER_ADDRESSES*>(malloc(ulSize));
+            if (pAddrs)
+            {
+                ULONG ulRet = GetAdaptersAddresses(AF_UNSPEC,
+                    GAA_FLAG_SKIP_UNICAST | GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_MULTICAST,
+                    nullptr, pAddrs, &ulSize);
+                if (ulRet == NO_ERROR)
+                {
+                    SC_HANDLE hSCM = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+                    for (IP_ADAPTER_ADDRESSES* p = pAddrs; p && nWgGuids < 64; p = p->Next)
+                    {
+                        bool bIsWG = false;
+                        if (hSCM && p->FriendlyName && p->FriendlyName[0])
+                        {
+                            WCHAR wszSvc[300] = {};
+                            StringCchPrintfW(wszSvc, ARRAYSIZE(wszSvc),
+                                L"WireGuardTunnel$%s", p->FriendlyName);
+                            SC_HANDLE hSvc = OpenServiceW(hSCM, wszSvc, SERVICE_QUERY_STATUS);
+                            if (hSvc) { bIsWG = true; CloseServiceHandle(hSvc); }
+                        }
+                        if (!bIsWG && p->Description &&
+                            wcsstr(p->Description, L"WireGuard") != nullptr)
+                            bIsWG = true;
+                        if (bIsWG)
+                        {
+                            WCHAR wszGuid[64] = {};
+                            MultiByteToWideChar(CP_ACP, 0, p->AdapterName, -1, wszGuid, 64);
+                            StringCchCopyW(wszWgGuids[nWgGuids++], 64, wszGuid);
+                            WCHAR d[128] = {};
+                            StringCchPrintfW(d, ARRAYSIZE(d),
+                                L"CorpNet: WireGuard adapter identified: '%s'",
+                                p->FriendlyName ? p->FriendlyName : L"(unknown)");
+                            LOG_DEBUG(d);
+                        }
+                    }
+                    if (hSCM) CloseServiceHandle(hSCM);
+                }
+                free(pAddrs);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Stage 1: NLA category check (DOMAIN_AUTHENTICATED)
+    // -----------------------------------------------------------------------
+    IEnumNetworks* pEnum = nullptr;
+    if (SUCCEEDED(pNLM->GetNetworks(NLM_ENUM_NETWORK_CONNECTED, &pEnum)) && pEnum)
+    {
+        INetwork* pNet = nullptr;
+        while (pEnum->Next(1, &pNet, nullptr) == S_OK && !bCorporate)
+        {
+            NLM_NETWORK_CATEGORY cat = NLM_NETWORK_CATEGORY_PUBLIC;
+            if (FAILED(pNet->GetCategory(&cat)) ||
+                cat != NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED)
+            {
+                pNet->Release();
+                continue;
+            }
+            bool bAllWireGuard = true;
+            bool bHasConnections = false;
+            IEnumNetworkConnections* pConnEnum = nullptr;
+            if (SUCCEEDED(pNet->GetNetworkConnections(&pConnEnum)) && pConnEnum)
+            {
+                INetworkConnection* pConn = nullptr;
+                while (pConnEnum->Next(1, &pConn, nullptr) == S_OK)
+                {
+                    bHasConnections = true;
+                    GUID adapterGuid = {};
+                    bool bThisIsWG = false;
+                    if (SUCCEEDED(pConn->GetAdapterId(&adapterGuid)) && nWgGuids > 0)
+                    {
+                        WCHAR wszGuid[64] = {};
+                        StringFromGUID2(adapterGuid, wszGuid, ARRAYSIZE(wszGuid));
+                        for (int g = 0; g < nWgGuids; g++)
+                        {
+                            if (_wcsicmp(wszGuid, wszWgGuids[g]) == 0)
+                            { bThisIsWG = true; break; }
+                        }
+                    }
+                    if (!bThisIsWG) bAllWireGuard = false;
+                    pConn->Release();
+                }
+                pConnEnum->Release();
+            }
+            if (bHasConnections && !bAllWireGuard)
+            {
+                NLM_NETWORK_CATEGORY catCheck = NLM_NETWORK_CATEGORY_PUBLIC;
+                if (SUCCEEDED(pNet->GetCategory(&catCheck)) &&
+                    catCheck == NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED)
+                {
+                    bCorporate = true;
+                    LOG_DEBUG(L"CorpNet: Stage1 - DOMAIN_AUTHENTICATED non-WireGuard network confirmed");
+                }
+                else
+                    LOG_DEBUG(L"CorpNet: Stage1 - category changed during recheck, skipping");
+            }
+            else if (bHasConnections && bAllWireGuard)
+                LOG_DEBUG(L"CorpNet: Stage1 - domain-authenticated but all WireGuard adapters, excluded");
+            pNet->Release();
+        }
+        pEnum->Release();
+    }
+    else
+        LOG_WARN(L"CorpNet: Stage1 - GetNetworks failed");
+
+    // -----------------------------------------------------------------------
+    // Stage 2: Fallback for domain-joined PCs where NLA shows PRIVATE.
+    //
+    // Root cause (seen with Red Hat VirtIO / Hyper-V adapters):
+    //   NLA classifies the network as PRIVATE because it could not verify
+    //   domain controller reachability at boot time. The classification is
+    //   then cached and not updated even after the DC becomes reachable.
+    //
+    // Fix: if Stage 1 missed, check:
+    //   (a) PC is domain-joined (registry SYSTEM\...\Tcpip\Parameters\Domain)
+    //   (b) At least one non-WireGuard LAN adapter is up with an IPv4 address
+    //   (c) DsGetDcName succeeds – this does a real DNS/NetBIOS query for a DC
+    //       on the current network. If it finds one, the LAN has DC access.
+    // -----------------------------------------------------------------------
+    if (!bCorporate)
+    {
+        // (a) Domain-join check via registry
+        bool bDomainJoined = false;
+        WCHAR wszDomainName[256] = {};
+        {
+            HKEY hKey = nullptr;
+            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters",
+                0, KEY_READ, &hKey) == ERROR_SUCCESS)
+            {
+                DWORD cbData = sizeof(wszDomainName);
+                DWORD dwType = 0;
+                if (RegQueryValueExW(hKey, L"Domain", nullptr, &dwType,
+                    reinterpret_cast<LPBYTE>(wszDomainName), &cbData) == ERROR_SUCCESS
+                    && dwType == REG_SZ && wszDomainName[0] != L'\0')
+                    bDomainJoined = true;
+                RegCloseKey(hKey);
+            }
+        }
+
+        if (!bDomainJoined)
+        {
+            LOG_DEBUG(L"CorpNet: Stage2 - PC is not domain-joined, skipping");
+        }
+        else
+        {
+            WCHAR d[320] = {};
+            StringCchPrintfW(d, ARRAYSIZE(d),
+                L"CorpNet: Stage2 - PC is domain-joined (domain='%s'), checking LAN...", wszDomainName);
+            LOG_DEBUG(d);
+
+            // (b) Non-WireGuard LAN adapter with IPv4 address
+            bool bHasNonWgLan = false;
+            {
+                ULONG ulSize2 = 0;
+                GetAdaptersAddresses(AF_INET,
+                    GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_MULTICAST,
+                    nullptr, nullptr, &ulSize2);
+                if (ulSize2 > 0)
+                {
+                    IP_ADAPTER_ADDRESSES* pAddrs2 =
+                        static_cast<IP_ADAPTER_ADDRESSES*>(malloc(ulSize2));
+                    if (pAddrs2)
+                    {
+                        if (GetAdaptersAddresses(AF_INET,
+                            GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_MULTICAST,
+                            nullptr, pAddrs2, &ulSize2) == NO_ERROR)
+                        {
+                            for (IP_ADAPTER_ADDRESSES* p = pAddrs2; p && !bHasNonWgLan; p = p->Next)
+                            {
+                                if (p->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+                                if (p->IfType == IF_TYPE_TUNNEL) continue;
+                                if (p->OperStatus != IfOperStatusUp) continue;
+                                if (!p->FirstUnicastAddress) continue;
+                                WCHAR wszGuid2[64] = {};
+                                MultiByteToWideChar(CP_ACP, 0, p->AdapterName, -1, wszGuid2, 64);
+                                bool bIsWG = false;
+                                for (int g = 0; g < nWgGuids; g++)
+                                    if (_wcsicmp(wszGuid2, wszWgGuids[g]) == 0) { bIsWG = true; break; }
+                                if (!bIsWG)
+                                {
+                                    bHasNonWgLan = true;
+                                    WCHAR d2[320] = {};
+                                    StringCchPrintfW(d2, ARRAYSIZE(d2),
+                                        L"CorpNet: Stage2 - non-WireGuard LAN adapter up: '%s'",
+                                        p->FriendlyName ? p->FriendlyName : L"(unknown)");
+                                    LOG_DEBUG(d2);
+                                }
+                            }
+                        }
+                        free(pAddrs2);
+                    }
+                }
+            }
+
+            if (!bHasNonWgLan)
+            {
+                LOG_DEBUG(L"CorpNet: Stage2 - no non-WireGuard LAN adapter up, skipping DC lookup");
+            }
+            else
+            {
+                // (c) DsGetDcName: locate a DC on the network (dynamic load).
+                // Types are from <dsgetdc.h> + <lmcons.h> (included at top of file).
+                // We load dynamically so Netapi32.lib is not a link-time dependency.
+                HMODULE hNetApi = LoadLibraryW(L"Netapi32.dll");
+                if (hNetApi)
+                {
+                    typedef DWORD (WINAPI* PfnDsGetDcName)(
+                        LPCWSTR ComputerName,
+                        LPCWSTR DomainName,
+                        GUID*   DomainGuid,
+                        LPCWSTR SiteName,
+                        ULONG   Flags,
+                        PDOMAIN_CONTROLLER_INFOW* DomainControllerInfo);
+                    typedef NET_API_STATUS (WINAPI* PfnNetApiBufferFree)(LPVOID);
+
+                    PfnDsGetDcName  pfnDs   = reinterpret_cast<PfnDsGetDcName>(
+                        GetProcAddress(hNetApi, "DsGetDcNameW"));
+                    PfnNetApiBufferFree pfnFree = reinterpret_cast<PfnNetApiBufferFree>(
+                        GetProcAddress(hNetApi, "NetApiBufferFree"));
+
+                    if (pfnDs && pfnFree)
+                    {
+                        DOMAIN_CONTROLLER_INFOW* pDcInfo = nullptr;
+                        // DS_FORCE_REDISCOVERY bypasses NLA/cache, does a real DNS query.
+                        // DS_IP_REQUIRED ensures the DC has a reachable IP.
+                        DWORD dwFlags = DS_FORCE_REDISCOVERY | DS_RETURN_DNS_NAME | DS_IP_REQUIRED;
+                        DWORD dwErr = pfnDs(nullptr, nullptr, nullptr, nullptr,
+                                           dwFlags, &pDcInfo);
+                        if (dwErr == ERROR_SUCCESS && pDcInfo)
+                        {
+                            // DC was found – but it might be reachable only via WireGuard
+                            // (Homeoffice VPN scenario). We must verify that the route to
+                            // the DC's IP goes through a non-WireGuard adapter.
+                            // If the DC address is only reachable via WireGuard, this is
+                            // NOT a corporate LAN – it is a VPN-connected remote machine.
+                            bool bDcViaLan = false;
+
+                            // Parse DC IP from pDcInfo->DomainControllerAddress ("\\1.2.3.4")
+                            PCWSTR pwszDcAddr = pDcInfo->DomainControllerAddress;
+                            if (pwszDcAddr)
+                            {
+                                // DomainControllerAddress format: "\\1.2.3.4" (skip leading \\)
+                                while (*pwszDcAddr == L'\\') pwszDcAddr++;
+
+                                // Convert wide DC address to narrow for inet_pton
+                                char szDcAddrA[64] = {};
+                                WideCharToMultiByte(CP_ACP, 0, pwszDcAddr, -1,
+                                    szDcAddrA, sizeof(szDcAddrA), nullptr, nullptr);
+
+                                DWORD dwDcIp = 0;
+                                if (inet_pton(AF_INET, szDcAddrA,
+                                    reinterpret_cast<void*>(&dwDcIp)) == 1)
+                                {
+                                    // GetBestRoute: which interface does Windows use
+                                    // to reach the DC IP?
+                                    MIB_IPFORWARDROW route = {};
+                                    if (GetBestRoute(dwDcIp, 0, &route) == NO_ERROR)
+                                    {
+                                        // route.dwForwardIfIndex = interface index for DC route
+                                        // Compare against WireGuard adapter indices
+                                        DWORD dwRouteIf = route.dwForwardIfIndex;
+
+                                        // Collect WireGuard adapter interface indices
+                                        ULONG ulSz3 = 0;
+                                        GetAdaptersAddresses(AF_INET,
+                                            GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_MULTICAST,
+                                            nullptr, nullptr, &ulSz3);
+                                        bool bRouteIsWG = false;
+                                        if (ulSz3 > 0)
+                                        {
+                                            IP_ADAPTER_ADDRESSES* pA3 =
+                                                static_cast<IP_ADAPTER_ADDRESSES*>(malloc(ulSz3));
+                                            if (pA3)
+                                            {
+                                                if (GetAdaptersAddresses(AF_INET,
+                                                    GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_MULTICAST,
+                                                    nullptr, pA3, &ulSz3) == NO_ERROR)
+                                                {
+                                                    for (IP_ADAPTER_ADDRESSES* pA = pA3; pA; pA = pA->Next)
+                                                    {
+                                                        if (pA->IfIndex != dwRouteIf) continue;
+                                                        // This is the adapter used to reach the DC
+                                                        WCHAR wszGuid3[64] = {};
+                                                        MultiByteToWideChar(CP_ACP, 0,
+                                                            pA->AdapterName, -1, wszGuid3, 64);
+                                                        for (int g = 0; g < nWgGuids; g++)
+                                                        {
+                                                            if (_wcsicmp(wszGuid3, wszWgGuids[g]) == 0)
+                                                            { bRouteIsWG = true; break; }
+                                                        }
+                                                        WCHAR d4[320] = {};
+                                                        StringCchPrintfW(d4, ARRAYSIZE(d4),
+                                                            L"CorpNet: Stage2 - route to DC %s via adapter '%s' (isWG=%d)",
+                                                            pwszDcAddr,
+                                                            pA->FriendlyName ? pA->FriendlyName : L"?",
+                                                            (int)bRouteIsWG);
+                                                        LOG_DEBUG(d4);
+                                                        break;
+                                                    }
+                                                }
+                                                free(pA3);
+                                            }
+                                        }
+
+                                        // Accept as corporate LAN only if the route to
+                                        // the DC does NOT go through a WireGuard adapter
+                                        bDcViaLan = !bRouteIsWG;
+                                    }
+                                    else
+                                    {
+                                        WCHAR d4[128] = {};
+                                        StringCchPrintfW(d4, ARRAYSIZE(d4),
+                                            L"CorpNet: Stage2 - GetBestRoute failed for DC %s", pwszDcAddr);
+                                        LOG_WARN(d4);
+                                        // Cannot determine route – assume NOT corporate to be safe
+                                        bDcViaLan = false;
+                                    }
+                                }
+                                else
+                                {
+                                    // DC address is not IPv4 (could be IPv6 or NetBIOS name)
+                                    // Fall back to trusting DsGetDcName result without route check
+                                    WCHAR d4[256] = {};
+                                    StringCchPrintfW(d4, ARRAYSIZE(d4),
+                                        L"CorpNet: Stage2 - DC address '%s' is not IPv4, skipping route check",
+                                        pwszDcAddr);
+                                    LOG_WARN(d4);
+                                    bDcViaLan = false;  // Safe default: don't assume corporate
+                                }
+                            }
+
+                            if (bDcViaLan)
+                            {
+                                WCHAR d3[320] = {};
+                                StringCchPrintfW(d3, ARRAYSIZE(d3),
+                                    L"CorpNet: Stage2 - DC '%s' reachable via LAN (not WireGuard): corporate network confirmed",
+                                    pDcInfo->DomainControllerName ? pDcInfo->DomainControllerName : L"?");
+                                LOG_DEBUG(d3);
+                                bCorporate = true;
+                            }
+                            else
+                            {
+                                WCHAR d3[320] = {};
+                                StringCchPrintfW(d3, ARRAYSIZE(d3),
+                                    L"CorpNet: Stage2 - DC '%s' found but route goes via WireGuard (VPN) - not corporate LAN",
+                                    pDcInfo->DomainControllerName ? pDcInfo->DomainControllerName : L"?");
+                                LOG_DEBUG(d3);
+                            }
+                            pfnFree(pDcInfo);
+                        }
+                        else
+                        {
+                            WCHAR d3[128] = {};
+                            StringCchPrintfW(d3, ARRAYSIZE(d3),
+                                L"CorpNet: Stage2 - DsGetDcName err=%lu, DC not reachable", dwErr);
+                            LOG_DEBUG(d3);
+                        }
+                    }
+                    FreeLibrary(hNetApi);
+                }
+                else
+                    LOG_WARN(L"CorpNet: Stage2 - Netapi32.dll not available");
+            }
+        }
+    }
+
+    pNLM->Release();
+    if (bNeedCoUninit) CoUninitialize();
+
+    WCHAR dResult[64] = {};
+    StringCchPrintfW(dResult, ARRAYSIZE(dResult),
+        L"CorpNet: Result = %s", bCorporate ? L"TRUE (corporate)" : L"FALSE (not corporate)");
+    LOG_DEBUG(dResult);
+    return bCorporate;
+}
+
+// ---------------------------------------------------------------------------
 // String duplication for COM (caller frees with CoTaskMemFree)
 // ---------------------------------------------------------------------------
 inline HRESULT WGCPStrDup(PCWSTR psz, WCHAR** ppwsz)
@@ -578,17 +885,14 @@ inline bool WGIsTunnelConnected(PCWSTR pwszProfile)
     SC_HANDLE hSvc = OpenServiceW(hSCM, wszSvc, SERVICE_QUERY_STATUS);
     if (!hSvc)
     {
-        WCHAR e[MAX_PATH_WGCP + 64] = {};
-        StringCchPrintfW(e, ARRAYSIZE(e), L"WGIsTunnelConnected: Service '%s' not found err=%lu", wszSvc, GetLastError());
-        LOG_DEBUG(e); CloseServiceHandle(hSCM); return false;
+        // Service not found = tunnel not running; this is the normal disconnected state
+        CloseServiceHandle(hSCM);
+        return false;
     }
     SERVICE_STATUS_PROCESS ssp = {}; DWORD dw = 0;
     QueryServiceStatusEx(hSvc, SC_STATUS_PROCESS_INFO,
                          reinterpret_cast<LPBYTE>(&ssp), sizeof(ssp), &dw);
     CloseServiceHandle(hSvc); CloseServiceHandle(hSCM);
-    WCHAR d[MAX_PATH_WGCP + 64] = {};
-    StringCchPrintfW(d, ARRAYSIZE(d), L"WGIsTunnelConnected: '%s' state=%lu", wszSvc, ssp.dwCurrentState);
-    LOG_DEBUG(d);
     return ssp.dwCurrentState == SERVICE_RUNNING;
 }
 
@@ -623,15 +927,18 @@ inline bool WGConnect(PCWSTR pwszExePath, PCWSTR pwszProfile)
     WCHAR wszCmd[MAX_PATH_WGCP * 2] = {};
     StringCchPrintfW(wszCmd, ARRAYSIZE(wszCmd),
                      L"\"%s\" /installtunnelservice \"%s\"", pwszExePath, wszConfig);
-    WCHAR d[MAX_PATH_WGCP * 2 + 32] = {};
-    StringCchPrintfW(d, ARRAYSIZE(d), L"WGConnect: %s", wszCmd); LOG_DEBUG(d);
+
+    WCHAR d[MAX_PATH_WGCP + 64] = {};
+    StringCchPrintfW(d, ARRAYSIZE(d), L"WGConnect: starting tunnel '%s'", pwszProfile);
+    LOG_DEBUG(d);
 
     STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
     if (!CreateProcessW(nullptr, wszCmd, nullptr, nullptr, FALSE,
                         CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
     {
-        WCHAR e[64] = {};
-        StringCchPrintfW(e, 64, L"WGConnect: CreateProcess failed err=%lu", GetLastError());
+        WCHAR e[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(e, ARRAYSIZE(e),
+            L"WGConnect: CreateProcess failed for '%s' err=%lu", pwszProfile, GetLastError());
         LOG_CRIT(e); return false;
     }
     WaitForSingleObject(pi.hProcess, 10000);
@@ -639,9 +946,19 @@ inline bool WGConnect(PCWSTR pwszExePath, PCWSTR pwszProfile)
     GetExitCodeProcess(pi.hProcess, &dwExit);
     CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
 
-    WCHAR r[64] = {};
-    StringCchPrintfW(r, 64, L"WGConnect: wireguard.exe exit code=%lu", dwExit);
-    if (dwExit == 0) LOG_DEBUG(r); else LOG_WARN(r);
+    if (dwExit == 0)
+    {
+        WCHAR r[MAX_PATH_WGCP + 32] = {};
+        StringCchPrintfW(r, ARRAYSIZE(r), L"WGConnect: tunnel '%s' started successfully", pwszProfile);
+        LOG_DEBUG(r);
+    }
+    else
+    {
+        WCHAR r[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(r, ARRAYSIZE(r),
+            L"WGConnect: wireguard.exe exited with code=%lu for tunnel '%s'", dwExit, pwszProfile);
+        LOG_WARN(r);
+    }
     return dwExit == 0;
 }
 
@@ -653,15 +970,18 @@ inline bool WGDisconnect(PCWSTR pwszExePath, PCWSTR pwszProfile)
     WCHAR wszCmd[MAX_PATH_WGCP * 2] = {};
     StringCchPrintfW(wszCmd, ARRAYSIZE(wszCmd),
                      L"\"%s\" /uninstalltunnelservice %s", pwszExePath, pwszProfile);
-    WCHAR d[MAX_PATH_WGCP * 2 + 32] = {};
-    StringCchPrintfW(d, ARRAYSIZE(d), L"WGDisconnect: %s", wszCmd); LOG_DEBUG(d);
+
+    WCHAR d[MAX_PATH_WGCP + 64] = {};
+    StringCchPrintfW(d, ARRAYSIZE(d), L"WGDisconnect: stopping tunnel '%s'", pwszProfile);
+    LOG_DEBUG(d);
 
     STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
     if (!CreateProcessW(nullptr, wszCmd, nullptr, nullptr, FALSE,
                         CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
     {
-        WCHAR e[64] = {};
-        StringCchPrintfW(e, 64, L"WGDisconnect: CreateProcess failed err=%lu", GetLastError());
+        WCHAR e[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(e, ARRAYSIZE(e),
+            L"WGDisconnect: CreateProcess failed for '%s' err=%lu", pwszProfile, GetLastError());
         LOG_CRIT(e);
         return false;
     }
@@ -669,9 +989,14 @@ inline bool WGDisconnect(PCWSTR pwszExePath, PCWSTR pwszProfile)
     DWORD dwExit = 0;
     GetExitCodeProcess(pi.hProcess, &dwExit);
     CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-    WCHAR r[64] = {};
-    StringCchPrintfW(r, 64, L"WGDisconnect: exit code=%lu", dwExit);
-    LOG_DEBUG(r);
+
+    if (dwExit != 0)
+    {
+        WCHAR r[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(r, ARRAYSIZE(r),
+            L"WGDisconnect: wireguard.exe exited with code=%lu for tunnel '%s'", dwExit, pwszProfile);
+        LOG_WARN(r);
+    }
     return true;
 }
 
@@ -686,7 +1011,8 @@ inline void WGGetTrafficStats(PCWSTR pwszWgExe, PCWSTR pwszProfile,
     WCHAR wszTmp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, wszTmp);
     WCHAR wszTmpFile[MAX_PATH] = {};
-    StringCchPrintfW(wszTmpFile, MAX_PATH, L"%swgcp_stats.txt", wszTmp);
+    StringCchPrintfW(wszTmpFile, MAX_PATH,
+        L"%swgcp_stats_%lu_%lu.txt", wszTmp, GetCurrentProcessId(), GetTickCount());
 
     WCHAR wszCmd[MAX_PATH_WGCP * 2] = {};
     StringCchPrintfW(wszCmd, ARRAYSIZE(wszCmd),
@@ -782,67 +1108,221 @@ inline void WGGetConnectedSince(PCWSTR pwszProfile, WCHAR* pwszOut, DWORD cchOut
 
 // ---------------------------------------------------------------------------
 // WGGetLastHandshakeSec
-// Returns seconds since the last WireGuard handshake for the given profile.
-// Returns -1 if the tunnel is not connected, wg.exe is unavailable, or
-// no handshake has occurred yet.
+// Returns seconds since the most recent WireGuard handshake across ALL peers
+// for the given profile. This is deliberately the MINIMUM age (most recent),
+// because the timeout should fire only when NO peer has communicated.
+//
+// Returns -1 if:
+//   - The tunnel is not running (wg.exe not found, or service stopped)
+//   - wg.exe times out or produces no output
+//   - No handshake has occurred yet for any peer (timestamp == 0)
+//
+// Bug fixes vs. previous version:
+//   1. Tmp file name is PID-unique → no collision between CP DLL and Tray
+//   2. stderr is redirected to NUL, not to the parent's STD_ERROR_HANDLE
+//      (which is NULL in a Windows service / LogonUI context and causes
+//       CreateProcess to fail with ERROR_INVALID_HANDLE on some machines)
+//   3. All peers are parsed, not just the first tab encountered
+//   4. Timeout raised from 3 s to 8 s (wg.exe can be slow on loaded systems)
+//   5. Return -1 (not 0) to distinguish "no handshake" from "wg.exe failed"
 // ---------------------------------------------------------------------------
 inline LONGLONG WGGetLastHandshakeSec(PCWSTR pwszWgExe, PCWSTR pwszProfile)
 {
     if (!pwszWgExe || !pwszWgExe[0] || !pwszProfile || !pwszProfile[0])
         return -1;
 
-    // Run: wg show <profile> latest-handshakes via stdout pipe
+    // Verify wg.exe exists before attempting to spawn it
+    if (GetFileAttributesW(pwszWgExe) == INVALID_FILE_ATTRIBUTES)
+    {
+        WCHAR e[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(e, ARRAYSIZE(e),
+            L"Handshake: wg.exe not found at '%s'", pwszWgExe);
+        LOG_WARN(e);
+        return -1;
+    }
+
+    // PID + Tick-Count: eindeutig auch wenn dieselbe PID die Funktion reentrant aufruft
+    // (z.B. Tooltip-Timer und NetWatch-Thread rufen gleichzeitig WGGetLastHandshakeSec auf)
+    WCHAR wszTmp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, wszTmp);
+    WCHAR wszTmpFile[MAX_PATH] = {};
+    StringCchPrintfW(wszTmpFile, MAX_PATH,
+        L"%swgcp_hs_%lu_%lu.txt", wszTmp, GetCurrentProcessId(), GetTickCount());
+
     WCHAR wszCmd[MAX_PATH_WGCP * 2] = {};
     StringCchPrintfW(wszCmd, ARRAYSIZE(wszCmd),
         L"\"%s\" show \"%s\" latest-handshakes", pwszWgExe, pwszProfile);
 
-    WCHAR wszTmp[MAX_PATH] = {}, wszTmpFile[MAX_PATH] = {};
-    GetTempPathW(MAX_PATH, wszTmp);
-    StringCchPrintfW(wszTmpFile, MAX_PATH, L"%swgcp_hs.txt", wszTmp);
-
+    // FILE_SHARE_READ erlaubt parallele Lesezugriffe auf dieselbe Datei,
+    // verhindert ERROR_SHARING_VIOLATION (err=32) wenn ein anderer Thread
+    // die Datei zeitgleich liest bevor wg.exe sie vollständig beschrieben hat.
     SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
-    HANDLE hOut = CreateFileW(wszTmpFile, GENERIC_WRITE, 0, &sa,
-                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hOut == INVALID_HANDLE_VALUE) return -1;
+
+    HANDLE hStdout = CreateFileW(wszTmpFile, GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hStdout == INVALID_HANDLE_VALUE)
+    {
+        WCHAR e[MAX_PATH + 64] = {};
+        StringCchPrintfW(e, ARRAYSIZE(e),
+            L"Handshake: cannot create temp file '%s' err=%lu", wszTmpFile, GetLastError());
+        LOG_WARN(e);
+        return -1;
+    }
+
+    HANDLE hStderr = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                  &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hStderr == INVALID_HANDLE_VALUE)
+        hStderr = hStdout;
 
     STARTUPINFOW si = { sizeof(si) };
     si.dwFlags    = STARTF_USESTDHANDLES;
-    si.hStdOutput = hOut;
-    si.hStdError  = GetStdHandle(STD_ERROR_HANDLE);
-    si.hStdInput  = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = hStdout;
+    si.hStdError  = hStderr;
+    si.hStdInput  = nullptr;  // no stdin needed
+
     PROCESS_INFORMATION pi = {};
     BOOL bOk = CreateProcessW(nullptr, wszCmd, nullptr, nullptr,
                                TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-    CloseHandle(hOut);
-    if (!bOk) { DeleteFileW(wszTmpFile); return -1; }
-    WaitForSingleObject(pi.hProcess, 3000);
-    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
 
+    CloseHandle(hStdout);
+    if (hStderr != hStdout) CloseHandle(hStderr);
+
+    if (!bOk)
+    {
+        DeleteFileW(wszTmpFile);
+        WCHAR e[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(e, ARRAYSIZE(e),
+            L"Handshake: CreateProcess(wg.exe) failed err=%lu", GetLastError());
+        LOG_WARN(e);
+        return -1;
+    }
+
+    // Bug fix 4: Timeout raised to 8 s – wg.exe can be slow on systems
+    // under load or when the WireGuard service is slow to respond.
+    DWORD dwWait = WaitForSingleObject(pi.hProcess, 8000);
+    DWORD dwExit = 0;
+    GetExitCodeProcess(pi.hProcess, &dwExit);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    if (dwWait == WAIT_TIMEOUT)
+    {
+        DeleteFileW(wszTmpFile);
+        WCHAR e[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(e, ARRAYSIZE(e),
+            L"Handshake: wg.exe timed out for profile '%s'", pwszProfile);
+        LOG_WARN(e);
+        return -1;
+    }
+
+    if (dwExit != 0)
+    {
+        DeleteFileW(wszTmpFile);
+        WCHAR e[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(e, ARRAYSIZE(e),
+            L"Handshake: wg.exe exited with code=%lu for profile '%s'",
+            dwExit, pwszProfile);
+        LOG_WARN(e);
+        return -1;
+    }
+
+    // Read output
     HANDLE hF = CreateFileW(wszTmpFile, GENERIC_READ, FILE_SHARE_READ,
                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hF == INVALID_HANDLE_VALUE) { DeleteFileW(wszTmpFile); return -1; }
-    char szBuf[512] = {};
+    if (hF == INVALID_HANDLE_VALUE)
+    {
+        DeleteFileW(wszTmpFile);
+        return -1;
+    }
+
+    // Buffer for output: wg show latest-handshakes outputs one line per peer:
+    // "<pubkey>\t<unix_timestamp>\n"
+    // Allocate enough for up to 64 peers (each line ~100 chars max)
+    char szBuf[8192] = {};
     DWORD dwRead = 0;
     ReadFile(hF, szBuf, sizeof(szBuf) - 1, &dwRead, nullptr);
     CloseHandle(hF);
     DeleteFileW(wszTmpFile);
 
-    if (dwRead == 0) return -1;
+    if (dwRead == 0)
+    {
+        // wg.exe produced no output = tunnel not running or no peers configured
+        WCHAR d[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(d, ARRAYSIZE(d),
+            L"Handshake: wg.exe produced no output for profile '%s' - tunnel may not be running",
+            pwszProfile);
+        LOG_DEBUG(d);
+        return -1;
+    }
 
-    // Parse: "<pubkey>\t<unix_timestamp>\n"
-    char* pTab = strchr(szBuf, '\t');
-    if (!pTab) return -1;
-    LONGLONG llTimestamp = _atoi64(pTab + 1);
-    if (llTimestamp <= 0) return -1; // 0 = no handshake yet
+    // Current Unix time for age calculation
+    FILETIME ftNow = {};
+    GetSystemTimeAsFileTime(&ftNow);
+    ULARGE_INTEGER uliNow;
+    uliNow.LowPart  = ftNow.dwLowDateTime;
+    uliNow.HighPart = ftNow.dwHighDateTime;
+    LONGLONG llNow = static_cast<LONGLONG>(uliNow.QuadPart / 10000000ULL) - 11644473600LL;
 
-    // Current Unix time
-    FILETIME ftNow = {}; GetSystemTimeAsFileTime(&ftNow);
-    ULARGE_INTEGER uli;
-    uli.LowPart = ftNow.dwLowDateTime; uli.HighPart = ftNow.dwHighDateTime;
-    LONGLONG llNow = (LONGLONG)(uli.QuadPart / 10000000ULL) - 11644473600LL;
+    // Bug fix 3: Parse ALL peer lines, return the MINIMUM age (most recent handshake).
+    // The old code stopped at the first tab, so a multi-peer config would only
+    // check peer #1, missing activity on other peers.
+    LONGLONG llMinAge = LLONG_MAX;
+    int      nPeers   = 0;
+    int      nWithHS  = 0;
 
-    LONGLONG llAge = llNow - llTimestamp;
-    return (llAge >= 0) ? llAge : -1;
+    char* pLine = szBuf;
+    while (pLine && *pLine)
+    {
+        char* pEnd = strchr(pLine, '\n');
+        if (pEnd) *pEnd = '\0';
+
+        // Each line: "<pubkey>\t<timestamp>"
+        char* pTab = strchr(pLine, '\t');
+        if (pTab)
+        {
+            nPeers++;
+            LONGLONG llTimestamp = _atoi64(pTab + 1);
+            if (llTimestamp > 0)  // 0 = no handshake yet for this peer
+            {
+                nWithHS++;
+                LONGLONG llAge = llNow - llTimestamp;
+                if (llAge >= 0 && llAge < llMinAge)
+                    llMinAge = llAge;
+            }
+        }
+
+        pLine = pEnd ? pEnd + 1 : nullptr;
+    }
+
+    if (nPeers == 0)
+    {
+        LOG_DEBUG(L"Handshake: wg.exe output contained no peer entries");
+        return -1;
+    }
+
+    if (nWithHS == 0)
+    {
+        WCHAR d[128] = {};
+        StringCchPrintfW(d, ARRAYSIZE(d),
+            L"Handshake: %d peer(s) found, none have completed a handshake yet"
+            L" - returning large age to trigger timeout", nPeers);
+        LOG_DEBUG(d);
+        // Return a very large age so the handshake-timeout check fires:
+        // A tunnel that has NEVER completed a handshake is broken and should
+        // be disconnected after the configured timeout.
+        return 86400LL;
+    }
+
+    // Log result for administrator visibility
+    {
+        WCHAR d[128] = {};
+        StringCchPrintfW(d, ARRAYSIZE(d),
+            L"Handshake: profile '%s' – %d peer(s), most recent handshake %lld s ago",
+            pwszProfile, nPeers, llMinAge);
+        LOG_DEBUG(d);
+    }
+
+    return llMinAge;
 }
 
 // ---------------------------------------------------------------------------
@@ -943,24 +1423,16 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
     // Use configured reader or search all readers
     if (cfg.wszReaderName[0] != L'\0')
     {
-        WCHAR d[320] = {};
-        StringCchPrintfW(d, 320, L"SC: Checking configured reader '%s'", cfg.wszReaderName);
-        LOG_DEBUG(d);
         SCARD_READERSTATEW rs = {};
-        rs.szReader     = cfg.wszReaderName;
+        rs.szReader       = cfg.wszReaderName;
         rs.dwCurrentState = SCARD_STATE_UNAWARE;
         LONG lRet = SCardGetStatusChangeW(hCtx, 0, &rs, 1);
         SCardReleaseContext(hCtx);
-        if (lRet == SCARD_S_SUCCESS &&
-            (rs.dwEventState & SCARD_STATE_PRESENT))
+        if (lRet == SCARD_S_SUCCESS && (rs.dwEventState & SCARD_STATE_PRESENT))
         {
-            WCHAR d2[320] = {};
-            StringCchPrintfW(d2, 320, L"SC: Card found in reader '%s'", cfg.wszReaderName);
-            LOG_DEBUG(d2);
             StringCchCopyW(pwszReaderOut, cchReader, cfg.wszReaderName);
             return true;
         }
-        LOG_DEBUG(L"SC: No card in configured reader");
         return false;
     }
 
@@ -971,53 +1443,36 @@ inline bool WGCPFindSmartcard(const WGCPSmartcardConfig& cfg,
                                    reinterpret_cast<LPWSTR>(&pwszReaders), &dwLen);
     if (lRet != SCARD_S_SUCCESS || !pwszReaders)
     {
-        WCHAR e[64] = {};
-        StringCchPrintfW(e, 64, L"SC: SCardListReaders err=0x%08X", lRet);
-        LOG_WARN(e);
+        // SCARD_E_NO_READERS_AVAILABLE is the normal state when no reader is attached
+        if (lRet != (LONG)SCARD_E_NO_READERS_AVAILABLE)
+        {
+            WCHAR e[64] = {};
+            StringCchPrintfW(e, 64, L"SC: SCardListReaders failed err=0x%08X", lRet);
+            LOG_WARN(e);
+        }
         SCardReleaseContext(hCtx);
         return false;
-    }
-
-    // Log all available readers
-    LOG_DEBUG(L"SC: Available readers:");
-    for (LPCWSTR pLog = pwszReaders; *pLog; pLog += wcslen(pLog) + 1)
-    {
-        WCHAR dLog[320] = {};
-        StringCchPrintfW(dLog, 320, L"SC:   -> '%s'", pLog);
-        LOG_DEBUG(dLog);
     }
 
     bool bFound = false;
     for (LPCWSTR p = pwszReaders; *p; p += wcslen(p) + 1)
     {
-        // Skip virtual SIM/UICC readers – they are not PIV-capable smartcard readers
+        // Skip virtual SIM/UICC readers – they are not PIV-capable
         if (wcsstr(p, L"UICC") || wcsstr(p, L"SIM") || wcsstr(p, L"Microsoft UICC"))
-        {
-            WCHAR dSkip[320] = {};
-            StringCchPrintfW(dSkip, 320, L"SC: Skipping virtual reader '%s'", p);
-            LOG_DEBUG(dSkip);
             continue;
-        }
 
-        WCHAR d[320] = {};
-        StringCchPrintfW(d, 320, L"SC: Checking reader '%s'", p);
-        LOG_DEBUG(d);
         SCARD_READERSTATEW rs = {};
-        rs.szReader      = p;
+        rs.szReader       = p;
         rs.dwCurrentState = SCARD_STATE_UNAWARE;
         if (SCardGetStatusChangeW(hCtx, 0, &rs, 1) == SCARD_S_SUCCESS &&
             (rs.dwEventState & SCARD_STATE_PRESENT))
         {
-            WCHAR d2[320] = {};
-            StringCchPrintfW(d2, 320, L"SC: Card found in reader '%s'", p);
-            LOG_DEBUG(d2);
             StringCchCopyW(pwszReaderOut, cchReader, p);
             bFound = true;
             break;
         }
     }
 
-    if (!bFound) LOG_DEBUG(L"SC: No card found in any reader");
     SCardFreeMemory(hCtx, pwszReaders);
     SCardReleaseContext(hCtx);
     return bFound;
@@ -1028,15 +1483,20 @@ inline bool WGCPWaitForCard(const WGCPSmartcardConfig& cfg,
                              WCHAR* pwszReaderOut, DWORD cchReader)
 {
     WCHAR d[64] = {};
-    StringCchPrintfW(d, 64, L"SC: Waiting for card (timeout %lu s)...", cfg.dwTimeout);
+    StringCchPrintfW(d, 64, L"SC: Waiting for card (timeout %lu s)", cfg.dwTimeout);
     LOG_DEBUG(d);
     DWORD dwDeadline = GetTickCount() + cfg.dwTimeout * 1000;
     do {
         if (WGCPFindSmartcard(cfg, pwszReaderOut, cchReader))
+        {
+            WCHAR d2[320] = {};
+            StringCchPrintfW(d2, ARRAYSIZE(d2), L"SC: Card found in reader '%s'", pwszReaderOut);
+            LOG_DEBUG(d2);
             return true;
+        }
         Sleep(500);
     } while (GetTickCount() < dwDeadline);
-    LOG_WARN(L"SC: Timeout - no card found");
+    LOG_WARN(L"SC: Card wait timeout - no PIV card found within configured timeout");
     return false;
 }
 
@@ -1057,14 +1517,7 @@ inline bool WGCPIsCardRemoved(PCWSTR pwszReader)
     SCardReleaseContext(hCtx);
 
     if (lRet != SCARD_S_SUCCESS) return true;
-    bool bRemoved = (rs.dwEventState & SCARD_STATE_EMPTY) != 0;
-    if (bRemoved)
-    {
-        WCHAR d[320] = {};
-        StringCchPrintfW(d, 320, L"SC: Card removed from reader '%s'", pwszReader);
-        LOG_DEBUG(d);
-    }
-    return bRemoved;
+    return (rs.dwEventState & SCARD_STATE_EMPTY) != 0;
 }
 
 // Verifies certificate thumbprint on the card (empty = no check)
@@ -1235,11 +1688,11 @@ inline bool WGCPVerifyCertThumbprint(SCARDHANDLE hCard, PCWSTR pwszExpected)
                 }
             }
         }
-        else
+        else if (lGet != SCARD_S_SUCCESS)
         {
             WCHAR eG[64] = {};
-            StringCchPrintfW(eG, 64, L"SC: GET DATA failed lRet=0x%08X", lGet);
-            LOG_WARN(eG);
+            StringCchPrintfW(eG, 64, L"SC: PIV GET DATA failed lRet=0x%08X - falling back to cert store", lGet);
+            LOG_DEBUG(eG);
         }
     }
 
@@ -1283,26 +1736,30 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
     DWORD        dwProto = 0;
 
     if (SCardEstablishContext(SCARD_SCOPE_SYSTEM, nullptr, nullptr, &hCtx) != SCARD_S_SUCCESS)
+    {
+        WCHAR e[64] = {};
+        StringCchPrintfW(e, 64, L"SC: SCardEstablishContext failed err=%lu", GetLastError());
+        LOG_WARN(e);
         return WGCPScResult::Error;
+    }
 
     LONG lRet = SCardConnectW(hCtx, wszReader,
                                SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1,
                                &hCard, &dwProto);
-    if (lRet == SCARD_S_SUCCESS)
-    {
-        WCHAR eP[64] = {};
-        StringCchPrintfW(eP, 64, L"Smartcard: Connected proto=%s",
-                         dwProto == SCARD_PROTOCOL_T0 ? L"T=0" : L"T=1");
-        LOG_DEBUG(eP);
-    }
     if (lRet != SCARD_S_SUCCESS)
     {
-        WCHAR eC[96] = {};
-        StringCchPrintfW(eC, 96,
-            L"Smartcard: SCardConnect failed lRet=0x%08X reader='%s'", lRet, wszReader);
-        LOG_WARN(eC);
+        WCHAR e[128] = {};
+        StringCchPrintfW(e, ARRAYSIZE(e),
+            L"SC: SCardConnect failed lRet=0x%08X reader='%s'", lRet, wszReader);
+        LOG_WARN(e);
         SCardReleaseContext(hCtx);
         return WGCPScResult::Error;
+    }
+    {
+        WCHAR d[96] = {};
+        StringCchPrintfW(d, ARRAYSIZE(d), L"SC: Connected to reader '%s' proto=%s",
+                         wszReader, dwProto == SCARD_PROTOCOL_T0 ? L"T=0" : L"T=1");
+        LOG_DEBUG(d);
     }
 
     if (!WGCPVerifyCertThumbprint(hCard, cfg.wszCertThumbprint))
@@ -1352,16 +1809,16 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
         DWORD  dwSelRecv    = sizeof(selResp);
         LONG   lSel = SCardTransmit(hCard, pProto, selectApdu, sizeof(selectApdu),
                                     nullptr, selResp, &dwSelRecv);
-        WCHAR eSel[96] = {};
-        StringCchPrintfW(eSel, 96,
-            L"Smartcard: SELECT PIV lRet=0x%08X SW=%02X%02X",
-            lSel, dwSelRecv >= 2 ? selResp[dwSelRecv-2] : 0,
-                  dwSelRecv >= 1 ? selResp[dwSelRecv-1] : 0);
-        LOG_DEBUG(eSel);
-
-        WCHAR eA[64] = {};
-        StringCchPrintfW(eA, 64, L"Smartcard: Sending VERIFY APDU (pinLen=%lu)", dwPinLen);
-        LOG_DEBUG(eA);
+        if (lSel != SCARD_S_SUCCESS)
+        {
+            WCHAR eSel[96] = {};
+            StringCchPrintfW(eSel, ARRAYSIZE(eSel),
+                L"SC: SELECT PIV failed lRet=0x%08X SW=%02X%02X",
+                lSel, dwSelRecv >= 2 ? selResp[dwSelRecv-2] : 0,
+                      dwSelRecv >= 1 ? selResp[dwSelRecv-1] : 0);
+            LOG_WARN(eSel);
+        }
+        LOG_DEBUG(L"SC: Sending PIV VERIFY APDU");
 
         lRet = SCardTransmit(hCard, pProto, apdu, sizeof(apdu),
                              nullptr, resp, &dwRecv);
@@ -1384,27 +1841,24 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
         // SW1=90, SW2=00 -> success
         // SW1=63, SW2=CX -> X attempts remaining
         // SW1=69, SW2=83 -> PIN locked
-        WCHAR eR[64] = {};
-        StringCchPrintfW(eR, 64, L"Smartcard: APDU response SW1=0x%02X SW2=0x%02X", resp[0], resp[1]);
-        LOG_DEBUG(eR);
-
         if (resp[0] == 0x90 && resp[1] == 0x00)
         {
-            LOG_DEBUG(L"Smartcard: PIN verification successful");
+            LOG_DEBUG(L"SC: PIN verification successful");
         }
         else if (resp[0] == 0x69 && resp[1] == 0x83)
         {
             SCardDisconnect(hCard, SCARD_LEAVE_CARD);
             SCardReleaseContext(hCtx);
-            LOG_WARN(L"Smartcard: PIN locked");
+            LOG_WARN(L"SC: PIN locked - user must reset PIN with YubiKey Manager");
             return WGCPScResult::PinLocked;
         }
         else
         {
-            WCHAR e[64] = {};
             DWORD remaining = resp[1] & 0x0F;
-            StringCchPrintfW(e, 64,
-                             L"Smartcard: Wrong PIN. Remaining attempts: %lu", remaining);
+            WCHAR e[96] = {};
+            StringCchPrintfW(e, ARRAYSIZE(e),
+                L"SC: Wrong PIN (SW=%02X%02X) - %lu attempt(s) remaining",
+                resp[0], resp[1], remaining);
             LOG_WARN(e);
             SCardDisconnect(hCard, SCARD_LEAVE_CARD);
             SCardReleaseContext(hCtx);
@@ -1414,6 +1868,6 @@ inline WGCPScResult WGCPAuthenticateSmartcard(const WGCPSmartcardConfig& cfg,
 
     SCardDisconnect(hCard, SCARD_LEAVE_CARD);
     SCardReleaseContext(hCtx);
-    LOG_DEBUG(L"Smartcard: Authentication successful");
+    LOG_DEBUG(L"SC: Authentication completed successfully");
     return WGCPScResult::Success;
 }

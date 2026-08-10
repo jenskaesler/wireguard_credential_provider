@@ -351,13 +351,32 @@ void WireGuardTrayApp::_UpdateTrayTooltip()
     }
     else
     {
-        StringCchPrintfW(_nid.szTip, ARRAYSIZE(_nid.szTip),
-            L"WireGuard VPN\n"
-            L"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
-            L"\U0001F534 %s\n"
-            L"\U0001F5A5 %s",
-            T(L"Getrennt", L"Disconnected"),
-            pwszProfile[0] ? pwszProfile : T(L"Kein Profil", L"No profile"));
+        if (_nProfiles == 0)
+        {
+            // Kein Profil: Nutzer zur Aktion leiten
+            StringCchPrintfW(_nid.szTip, ARRAYSIZE(_nid.szTip),
+                L"WireGuard VPN\n"
+                L"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+                L"\U000026A0 %s\n"
+                L"%s",
+                T(L"Kein Profil vorhanden",
+                  L"No profile configured"),
+                T(L"Klicken zum Importieren...",
+                  L"Click to import a profile..."));
+        }
+        else
+        {
+            StringCchPrintfW(_nid.szTip, ARRAYSIZE(_nid.szTip),
+                L"WireGuard VPN\n"
+                L"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+                L"\U0001F534 %s\n"
+                L"\U0001F5A5 %s\n"
+                L"%s",
+                T(L"Getrennt", L"Disconnected"),
+                pwszProfile,
+                T(L"Klicken zum Verbinden",
+                  L"Click to connect"));
+        }
     }
 }
 
@@ -369,15 +388,13 @@ void WireGuardTrayApp::_ShowContextMenu()
     HMENU hMenu = CreatePopupMenu();
     if (!hMenu) return;
 
-    // -- Line 1: App name with lock icon --
+    // -----------------------------------------------------------------------
+    // Header: App-Name (ausgegraut, nur zur Orientierung)
+    // -----------------------------------------------------------------------
     AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0,
         L"\U0001F512  WireGuard VPN");
-    LOG_DEBUG(L"Menu: app title rendered");
 
-    // -- Line 2: Status + active profile --
-    // Format: "Status: Verbunden  |  Profil: LT260430"
-    //         "Status: Getrennt   |  Profil: LT260430"
-    //         "Status: Getrennt   |  Kein Profil"  (no profiles)
+    // Status + aktives Profil (ausgegraut, informativer Text)
     {
         WCHAR wszStatus[MAX_PATH_WGCP + 64] = {};
         if (_nProfiles > 0)
@@ -399,20 +416,47 @@ void WireGuardTrayApp::_ShowContextMenu()
             LOG_WARN(L"Menu: no profiles available");
         }
         AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0, wszStatus);
-        WCHAR dbg[MAX_PATH_WGCP + 80] = {};
-        StringCchPrintfW(dbg, ARRAYSIZE(dbg),
-            L"Menu: status line '%s'", wszStatus);
-        LOG_DEBUG(dbg);
     }
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
-    // -- Profile – je ein Submenu --
-    // Active profile:   [⏹ Trennen/Disconnect]  [🗑 Löschen – disabled]
-    // Inactive profile: [▶ Aktivieren/Activate]  [🗑 Löschen]
+    // -----------------------------------------------------------------------
+    // Haupt-Aktion: Verbinden / Trennen direkt im Hauptmenü (fett / prominent)
+    // Dies ist die wichtigste Aktion – kein Submenu-Klick nötig.
+    // -----------------------------------------------------------------------
+    if (_nProfiles > 0)
+    {
+        if (_bConnected)
+        {
+            // Aktiver Tunnel kann direkt getrennt werden
+            AppendMenuW(hMenu, MF_STRING, IDM_DISCONNECT,
+                T(L"\u23F9  VPN trennen", L"\u23F9  Disconnect VPN"));
+        }
+        else
+        {
+            // Verbinden mit dem aktuell ausgewählten Profil
+            WCHAR wszConnectLabel[MAX_PATH_WGCP + 32] = {};
+            StringCchPrintfW(wszConnectLabel, ARRAYSIZE(wszConnectLabel),
+                T(L"\u25B6  VPN verbinden  \u2013  %s",
+                  L"\u25B6  Connect VPN  \u2013  %s"),
+                _rgProfiles[_nSelectedProfile]);
+            AppendMenuW(hMenu, MF_STRING, IDM_CONNECT, wszConnectLabel);
+        }
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    }
+
+    // -----------------------------------------------------------------------
+    // Profil-Liste
+    // Jedes Profil hat ein Submenu mit:
+    //   - "Verbinden" / "Trennen" (je nach Zustand)
+    //   - "Löschen" (ausgegraut wenn aktives oder verbundenes Profil)
+    //
+    // Das aktiv ausgewählte Profil hat MF_CHECKED (Häkchen).
+    // Klick auf den Parent-Eintrag: Profil auswählen OHNE Verbinden.
+    // -----------------------------------------------------------------------
     for (int i = 0; i < _nProfiles; i++)
     {
-        bool bIsActive    = (i == _nSelectedProfile);
-        bool bIsConnected = bIsActive && _bConnected;
+        bool bIsSelected  = (i == _nSelectedProfile);
+        bool bIsConnected = bIsSelected && _bConnected;
 
         HMENU hSub = CreatePopupMenu();
         if (!hSub)
@@ -421,168 +465,187 @@ void WireGuardTrayApp::_ShowContextMenu()
             continue;
         }
 
+        // Submenu-Eintrag 1: Verbinden / Trennen
         if (bIsConnected)
         {
-            // Active & connected → show Disconnect
-            AppendMenuW(hSub, MF_STRING,
-                IDM_DISCONNECT,
+            AppendMenuW(hSub, MF_STRING, IDM_DISCONNECT,
                 T(L"\u23F9  Trennen", L"\u23F9  Disconnect"));
-            LOG_DEBUG(L"Menu: submenu action = Disconnect (active tunnel)");
+        }
+        else if (!_bConnected)
+        {
+            // Nur wenn kein anderer Tunnel läuft darf verbunden werden
+            AppendMenuW(hSub, MF_STRING, IDM_CONNECT,
+                T(L"\u25B6  Verbinden", L"\u25B6  Connect"));
         }
         else
         {
-            // Inactive or disconnected → show Activate
-            AppendMenuW(hSub, MF_STRING,
-                static_cast<UINT_PTR>(IDM_PROFILE_BASE + i),
-                T(L"\u25B6  Aktivieren", L"\u25B6  Activate"));
-            LOG_DEBUG(L"Menu: submenu action = Activate");
+            // Ein anderes Profil ist verbunden – erst trennen, dann kann dieses aktiv werden
+            AppendMenuW(hSub, MF_STRING | MF_GRAYED, 0,
+                T(L"\u25B6  Verbinden (erst anderes trennen)",
+                  L"\u25B6  Connect (disconnect other first)"));
         }
 
-        // Delete – only enabled when this profile is NOT the active tunnel
+        // Submenu-Eintrag 2: Löschen
+        // Ausgegraut wenn: (a) dieses Profil aktiv verbunden ist ODER
+        //                  (b) dieses Profil das aktuell ausgewählte ist
+        // Begründung für (b): das ausgewählte Profil ist das "aktive" Profil
+        // des Nutzers – es würde beim nächsten Verbinden genutzt. Löschen
+        // ohne Auswahl eines anderen Profils zuerst führt zu Verwirrung.
         UINT uDelFlags = MF_STRING;
-        if (bIsConnected) uDelFlags |= MF_GRAYED;
+        if (bIsSelected)
+            uDelFlags |= MF_GRAYED;  // aktives Profil: erst anderes auswählen
         AppendMenuW(hSub, uDelFlags,
             static_cast<UINT_PTR>(IDM_PROFILE_DELETE_BASE + i),
             T(L"\U0001F5D1  L\u00F6schen", L"\U0001F5D1  Delete"));
 
-        // Parent entry – plain profile name, no icon prefix
-        // Selection state is indicated by MF_CHECKED (native checkmark)
-        WCHAR wszProfEntry[MAX_PATH_WGCP + 4] = {};
-        StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry),
-            L"   %s", _rgProfiles[i]);
+        // Parent-Eintrag: Profilname mit Häkchen wenn ausgewählt.
+        // Klick auf den Parent-Eintrag = Profil auswählen (OHNE verbinden).
+        // Das Häkchen zeigt an welches Profil aktiv ausgewählt ist.
+        WCHAR wszProfEntry[MAX_PATH_WGCP + 8] = {};
+        if (bIsConnected)
+        {
+            // Verbundenes Profil bekommt grünen Punkt als Zusatzindikator
+            StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry),
+                L"\U0001F7E2 %s", _rgProfiles[i]);
+        }
+        else
+        {
+            StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry),
+                L"    %s", _rgProfiles[i]);
+        }
 
         UINT uFlags = MF_POPUP;
-        if (bIsActive) uFlags |= MF_CHECKED;
+        if (bIsSelected) uFlags |= MF_CHECKED;
 
-        {
-            WCHAR dbg[MAX_PATH_WGCP + 96] = {};
-            StringCchPrintfW(dbg, ARRAYSIZE(dbg),
-                L"Menu: profile[%d] '%s' active=%s connected=%s",
-                i, _rgProfiles[i],
-                bIsActive    ? L"yes" : L"no",
-                bIsConnected ? L"yes" : L"no");
-            LOG_DEBUG(dbg);
-        }
-
+        // Klick auf Profil-Eintrag = Profil auswählen, IDM_PROFILE_BASE + i
+        // Dies ist ein MF_POPUP-Eintrag, der Klick öffnet das Submenu.
+        // Der Klick auf den Parent-Eintrag selbst wird NICHT als Kommando
+        // verarbeitet (Windows-Verhalten bei MF_POPUP).
+        // Daher ist "Aktivieren" im Submenu der Weg zum Auswählen UND
+        // der Parent-Eintrag zeigt nur den Zustand via Häkchen an.
         AppendMenuW(hMenu, uFlags,
             reinterpret_cast<UINT_PTR>(hSub), wszProfEntry);
-        // hSub ownership transferred to hMenu via MF_POPUP;
-        // DestroyMenu(hMenu) will recursively destroy all submenus.
     }
 
-    if (_nProfiles > 0)
-    {
+    // -----------------------------------------------------------------------
+    // YubiKey / Smartcard-Status (nur wenn aktiviert)
+    // -----------------------------------------------------------------------
+    if (_nProfiles > 0 || _scConfig.bEnabled)
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
-        // -- YubiKey Status (nur wenn SmartcardEnabled=1) --
-        if (_scConfig.bEnabled)
+    if (_scConfig.bEnabled)
+    {
+        WCHAR wszYkLine[128] = {};
+        WCHAR wszReader[256] = {};
+        bool bYkPresent = WGCPFindSmartcard(_scConfig, wszReader, 256);
+        if (!bYkPresent) LOG_DEBUG(L"Menu: No YubiKey/smartcard detected in any reader");
+
+        if (bYkPresent)
         {
-            WCHAR wszYkLine[128] = {};
-            WCHAR wszReader[256] = {};
-            bool bYkPresent = WGCPFindSmartcard(_scConfig, wszReader, 256);
-            LOG_DEBUG(bYkPresent ? L"Menu: YubiKey present" : L"Menu: YubiKey not detected");
-            if (bYkPresent)
+            // Serial via ykman info – mit PID-uniquer Temp-Datei (wie handshake fix)
+            WCHAR wszSerial[32] = {};
+            WCHAR wszTmp[MAX_PATH] = {};
+            GetTempPathW(MAX_PATH, wszTmp);
+            WCHAR wszTmpF[MAX_PATH] = {};
+            StringCchPrintfW(wszTmpF, MAX_PATH,
+                L"%swgcp_yk_%lu.txt", wszTmp, GetCurrentProcessId());
+
+            // ykman in separatem Thread wäre besser, aber da wir im Menü-Kontext
+            // sind und das Menü sowieso blockiert, ist ein kurzer sync-Aufruf OK.
+            // Timeout: 2 s – wenn ykman nicht antwortet, zeigen wir nur "verbunden"
+            WCHAR wszCmd[256] = {};
+            StringCchPrintfW(wszCmd, 256,
+                L"cmd.exe /C ykman info > \"%s\" 2>NUL", wszTmpF);
+            STARTUPINFOW si = { sizeof(si) };
+            PROCESS_INFORMATION pi = {};
+            if (CreateProcessW(nullptr, wszCmd, nullptr, nullptr, FALSE,
+                CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
             {
-                // Serial via ykman info
-                WCHAR wszSerial[32] = {};
-                WCHAR wszTmp[MAX_PATH] = {}; GetTempPathW(MAX_PATH, wszTmp);
-                WCHAR wszTmpF[MAX_PATH] = {};
-                StringCchPrintfW(wszTmpF, MAX_PATH, L"%swgcp_yk.txt", wszTmp);
-                WCHAR wszCmd[256] = {};
-                StringCchPrintfW(wszCmd, 256,
-                    L"cmd.exe /C ykman info > \"%s\"", wszTmpF);
-                STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
-                if (CreateProcessW(nullptr, wszCmd, nullptr, nullptr, FALSE,
-                    CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+                WaitForSingleObject(pi.hProcess, 2000);
+                CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+                HANDLE hF = CreateFileW(wszTmpF, GENERIC_READ, FILE_SHARE_READ,
+                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (hF != INVALID_HANDLE_VALUE)
                 {
-                    WaitForSingleObject(pi.hProcess, 2000);
-                    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-                    HANDLE hF = CreateFileW(wszTmpF, GENERIC_READ, FILE_SHARE_READ,
-                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-                    if (hF != INVALID_HANDLE_VALUE)
+                    char buf[512] = {}; DWORD dw = 0;
+                    ReadFile(hF, buf, sizeof(buf) - 1, &dw, nullptr);
+                    CloseHandle(hF);
+                    DeleteFileW(wszTmpF);
+                    char* p = strstr(buf, "Serial number:");
+                    if (p)
                     {
-                        char buf[512] = {}; DWORD dw = 0;
-                        ReadFile(hF, buf, sizeof(buf) - 1, &dw, nullptr);
-                        CloseHandle(hF); DeleteFileW(wszTmpF);
-                        char* p = strstr(buf, "Serial number:");
-                        if (p)
-                        {
-                            p += 14; while (*p == ' ') p++;
-                            char szSer[16] = {}; int j = 0;
-                            while (*p && *p != '\r' && *p != '\n' && j < 15)
-                                szSer[j++] = *p++;
-                            MultiByteToWideChar(CP_ACP, 0, szSer, -1, wszSerial, 32);
-                        }
+                        p += 14; while (*p == ' ') p++;
+                        char szSer[16] = {}; int j = 0;
+                        while (*p && *p != '\r' && *p != '\n' && j < 15)
+                            szSer[j++] = *p++;
+                        MultiByteToWideChar(CP_ACP, 0, szSer, -1, wszSerial, 32);
                     }
                 }
-                if (wszSerial[0])
-                    StringCchPrintfW(wszYkLine, 128,
-                        T(L"\U0001F511  YubiKey verbunden  (S/N %s)",
-                          L"\U0001F511  YubiKey connected  (S/N %s)"),
-                        wszSerial);
-                else
-                    StringCchCopyW(wszYkLine, 128,
-                        T(L"\U0001F511  YubiKey verbunden",
-                          L"\U0001F511  YubiKey connected"));
             }
+            if (wszSerial[0])
+                StringCchPrintfW(wszYkLine, 128,
+                    T(L"\U0001F511  YubiKey verbunden  (S/N %s)",
+                      L"\U0001F511  YubiKey connected  (S/N %s)"),
+                    wszSerial);
             else
                 StringCchCopyW(wszYkLine, 128,
-                    T(L"\U0001F511  YubiKey nicht erkannt",
-                      L"\U0001F511  YubiKey not detected"));
-            AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0, wszYkLine);
-
-            // YubiKey Manager (wenn installiert)
-            WCHAR wszYkMgr[MAX_PATH] = {};
-            const WCHAR* apwszPaths[] = {
-                L"%PROGRAMFILES%\\Yubico\\Yubico Authenticator\\authenticator.exe",
-                L"%PROGRAMFILES(X86)%\\Yubico\\Yubico Authenticator\\authenticator.exe",
-                L"%LOCALAPPDATA%\\Programs\\Yubico Authenticator\\authenticator.exe",
-                L"%PROGRAMFILES%\\Yubico\\YubiKey Manager\\ykman-gui.exe",
-                L"%PROGRAMFILES(X86)%\\Yubico\\YubiKey Manager\\ykman-gui.exe",
-                L"%LOCALAPPDATA%\\Programs\\yubikey-manager-qt\\ykman-gui.exe",
-            };
-            bool bYkMgrFound = false;
-            for (auto pwszTryPath : apwszPaths)
-            {
-                ExpandEnvironmentStringsW(pwszTryPath, wszYkMgr, MAX_PATH);
-                if (GetFileAttributesW(wszYkMgr) != INVALID_FILE_ATTRIBUTES)
-                { bYkMgrFound = true; break; }
-            }
-            if (bYkMgrFound)
-            {
-                StringCchCopyW(_wszYkMgrPath, MAX_PATH, wszYkMgr);
-                LOG_DEBUG(L"Menu: YubiKey Manager found");
-                AppendMenuW(hMenu, MF_STRING, IDM_OPEN_YKMANAGER,
-                    T(L"   Yubico Authenticator \u00F6ffnen...",
-                      L"   Open Yubico Authenticator..."));
-            }
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+                    T(L"\U0001F511  YubiKey verbunden",
+                      L"\U0001F511  YubiKey connected"));
         }
+        else
+        {
+            StringCchCopyW(wszYkLine, 128,
+                T(L"\U0001F511  YubiKey nicht erkannt",
+                  L"\U0001F511  YubiKey not detected"));
+        }
+        AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0, wszYkLine);
 
-        // -- Profil-Aktionen --
-        AppendMenuW(hMenu, MF_STRING, IDM_IMPORT,
-            T(L"\U0001F4C2  Profil importieren...",
-              L"\U0001F4C2  Import profile..."));
-        // Delete is now inside each profile's submenu (IDM_PROFILE_DELETE_BASE + i)
-    }
-    else
-    {
+        // YubiKey Manager öffnen (wenn installiert)
+        WCHAR wszYkMgr[MAX_PATH] = {};
+        const WCHAR* apwszPaths[] = {
+            L"%PROGRAMFILES%\\Yubico\\Yubico Authenticator\\authenticator.exe",
+            L"%PROGRAMFILES(X86)%\\Yubico\\Yubico Authenticator\\authenticator.exe",
+            L"%LOCALAPPDATA%\\Programs\\Yubico Authenticator\\authenticator.exe",
+            L"%PROGRAMFILES%\\Yubico\\YubiKey Manager\\ykman-gui.exe",
+            L"%PROGRAMFILES(X86)%\\Yubico\\YubiKey Manager\\ykman-gui.exe",
+            L"%LOCALAPPDATA%\\Programs\\yubikey-manager-qt\\ykman-gui.exe",
+        };
+        bool bYkMgrFound = false;
+        for (auto pwszTryPath : apwszPaths)
+        {
+            ExpandEnvironmentStringsW(pwszTryPath, wszYkMgr, MAX_PATH);
+            if (GetFileAttributesW(wszYkMgr) != INVALID_FILE_ATTRIBUTES)
+            { bYkMgrFound = true; break; }
+        }
+        if (bYkMgrFound)
+        {
+            StringCchCopyW(_wszYkMgrPath, MAX_PATH, wszYkMgr);
+            AppendMenuW(hMenu, MF_STRING, IDM_OPEN_YKMANAGER,
+                T(L"   Yubico Authenticator \u00F6ffnen...",
+                  L"   Open Yubico Authenticator..."));
+        }
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(hMenu, MF_STRING, IDM_IMPORT,
-            T(L"\U0001F4C2  Profil importieren...",
-              L"\U0001F4C2  Import profile..."));
     }
+
+    // -----------------------------------------------------------------------
+    // Profil-Verwaltung
+    // -----------------------------------------------------------------------
+    AppendMenuW(hMenu, MF_STRING, IDM_IMPORT,
+        T(L"\U0001F4C2  Profil importieren...",
+          L"\U0001F4C2  Import profile..."));
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, IDM_EXIT,
         T(L"Beenden", L"Exit"));
 
-
+    // -----------------------------------------------------------------------
+    // Menü anzeigen
+    // -----------------------------------------------------------------------
     SetForegroundWindow(_hWnd);
     POINT pt = {};
     GetCursorPos(&pt);
 
-    // Apply dark theme to the popup menu if Windows is in dark mode
+    // Dark Mode
     HKEY hThemeKey = nullptr;
     DWORD dwLight = 1, dwSz = sizeof(dwLight);
     if (RegOpenKeyExW(HKEY_CURRENT_USER,
@@ -593,7 +656,7 @@ void WireGuardTrayApp::_ShowContextMenu()
                          reinterpret_cast<LPBYTE>(&dwLight), &dwSz);
         RegCloseKey(hThemeKey);
     }
-    if (dwLight == 0) // Dark Mode aktiv
+    if (dwLight == 0)
     {
         HMODULE hUx = LoadLibraryW(L"uxtheme.dll");
         if (hUx)
@@ -614,18 +677,53 @@ void WireGuardTrayApp::_ShowContextMenu()
 
 // ---------------------------------------------------------------------------
 // _ShowBalloon – helper for tray balloon notifications
+// dwTimeout: display duration in ms (Windows caps at ~30 s; 0 = system default ~4 s)
 // ---------------------------------------------------------------------------
-void WireGuardTrayApp::_ShowBalloon(PCWSTR pwszTitle, PCWSTR pwszMsg, DWORD dwInfoFlags)
+void WireGuardTrayApp::_ShowBalloon(PCWSTR pwszTitle, PCWSTR pwszMsg,
+                                     DWORD dwInfoFlags, DWORD dwTimeout)
 {
     NOTIFYICONDATAW nid = { sizeof(nid) };
     nid.hWnd        = _hWnd;
     nid.uID         = 1;
     nid.uFlags      = NIF_INFO;
     nid.dwInfoFlags = dwInfoFlags;
-    nid.uTimeout    = 4000;
+    nid.uTimeout    = (dwTimeout > 0) ? dwTimeout : 4000;
     StringCchCopyW(nid.szInfoTitle, ARRAYSIZE(nid.szInfoTitle), pwszTitle);
     StringCchCopyW(nid.szInfo,      ARRAYSIZE(nid.szInfo),      pwszMsg);
     Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+// ---------------------------------------------------------------------------
+// _SelectProfile – Profil aktiv setzen OHNE eine Verbindung herzustellen.
+// Wird aufgerufen wenn der Nutzer ein Profil im Kontextmenü auswählt.
+// ---------------------------------------------------------------------------
+void WireGuardTrayApp::_SelectProfile(int profileIndex)
+{
+    if (profileIndex < 0 || profileIndex >= _nProfiles) return;
+    if (profileIndex == _nSelectedProfile)
+    {
+        LOG_DEBUG(L"Tray: SelectProfile - profile already selected, no change");
+        return;
+    }
+
+    WCHAR d[MAX_PATH_WGCP + 64] = {};
+    StringCchPrintfW(d, ARRAYSIZE(d),
+        L"Tray: SelectProfile[%d] '%s' (was [%d] '%s')",
+        profileIndex, _rgProfiles[profileIndex],
+        _nSelectedProfile, _rgProfiles[_nSelectedProfile]);
+    LOG_DEBUG(d);
+
+    _nSelectedProfile = profileIndex;
+    _RefreshStatus();
+    _UpdateTrayIcon();
+
+    // Kurze Balloon-Rückmeldung damit der Nutzer sieht was ausgewählt wurde
+    WCHAR wszMsg[MAX_PATH_WGCP + 64] = {};
+    StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+        T(L"Profil \u201e%s\u201c ausgew\u00E4hlt.\nMit VPN verbinden um zu aktivieren.",
+          L"Profile \u201c%s\u201d selected.\nClick Connect VPN to activate."),
+        _rgProfiles[_nSelectedProfile]);
+    _ShowBalloon(L"WireGuard VPN", wszMsg, NIIF_INFO, 4000);
 }
 
 // ---------------------------------------------------------------------------
@@ -648,21 +746,13 @@ void WireGuardTrayApp::_Connect(int profileIndex)
         }
     }
 
-    LOG_DEBUG(L"Tray: Rufe WGConnect auf...");
-    bool bConnectCalled = WGConnect(_wszExePath, pwszProfile);
-    WCHAR wszConnLog[64] = {};
-    StringCchPrintfW(wszConnLog, 64, L"Tray: WGConnect returned %d", bConnectCalled);
-    LOG_DEBUG(wszConnLog);
+    WGConnect(_wszExePath, pwszProfile);
 
     bool bOk = false;
     for (int i = 0; i < 12; i++)
     {
         Sleep(500);
-        bool bRunning = WGIsTunnelConnected(pwszProfile);
-        WCHAR wszPoll[64] = {};
-        StringCchPrintfW(wszPoll, 64, L"Tray: Poll %d/12 running=%d", i+1, bRunning);
-        LOG_DEBUG(wszPoll);
-        if (bRunning) { bOk = true; break; }
+        if (WGIsTunnelConnected(pwszProfile)) { bOk = true; break; }
     }
 
     _RefreshStatus();
@@ -670,20 +760,22 @@ void WireGuardTrayApp::_Connect(int profileIndex)
 
     if (bOk)
     {
-        WCHAR wszMsg[128] = {};
+        WCHAR wszMsg[MAX_PATH_WGCP + 32] = {};
         StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
             T(L"Tunnel '%s' verbunden.", L"Tunnel '%s' connected."),
             pwszProfile);
         _ShowBalloon(L"WireGuard VPN", wszMsg, NIIF_INFO);
+        LOG_DEBUG(wszMsg);
     }
     else
     {
-        WCHAR wszMsg[128] = {};
+        WCHAR wszMsg[MAX_PATH_WGCP + 64] = {};
         StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
             T(L"Tunnel '%s' konnte nicht gestartet werden.",
               L"Tunnel '%s' could not be started."),
             pwszProfile);
         _ShowBalloon(L"WireGuard VPN", wszMsg, NIIF_WARNING);
+        LOG_WARN(wszMsg);
     }
 }
 
@@ -695,19 +787,34 @@ void WireGuardTrayApp::_Disconnect()
     if (_nProfiles == 0) return;
     PCWSTR pwszProfile = _rgProfiles[_nSelectedProfile];
     WGDisconnect(_wszExePath, pwszProfile);
+
+    bool bStopped = false;
     for (int i = 0; i < 12; i++)
     {
         Sleep(500);
-        if (!WGIsTunnelConnected(pwszProfile)) break;
+        if (!WGIsTunnelConnected(pwszProfile)) { bStopped = true; break; }
     }
     _RefreshStatus();
     _UpdateTrayIcon();
 
     WCHAR wszMsg[128] = {};
-    StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
-        T(L"Tunnel '%s' getrennt.", L"Tunnel '%s' disconnected."),
-        pwszProfile);
-    _ShowBalloon(L"WireGuard VPN", wszMsg, NIIF_INFO);
+    if (bStopped)
+    {
+        StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+            T(L"Tunnel '%s' getrennt.", L"Tunnel '%s' disconnected."),
+            pwszProfile);
+        _ShowBalloon(L"WireGuard VPN", wszMsg, NIIF_INFO);
+        LOG_DEBUG(wszMsg);
+    }
+    else
+    {
+        StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+            T(L"Tunnel '%s' konnte nicht getrennt werden.",
+              L"Tunnel '%s' could not be disconnected."),
+            pwszProfile);
+        _ShowBalloon(L"WireGuard VPN", wszMsg, NIIF_WARNING);
+        LOG_WARN(wszMsg);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -770,10 +877,10 @@ bool WireGuardTrayApp::_DoSmartcardAuth()
     }
 
     if (!bOk && wszMsg[0])
-        MessageBoxW(_hWnd, wszMsg,
-                    T(L"WireGuard VPN \u2013 YubiKey-Authentifizierung",
-                      L"WireGuard VPN \u2013 YubiKey Authentication"),
-                    MB_ICONWARNING | MB_OK);
+        _ShowBalloon(
+            T(L"WireGuard VPN \u2013 YubiKey-Authentifizierung",
+              L"WireGuard VPN \u2013 YubiKey Authentication"),
+            wszMsg, NIIF_WARNING);
 
     return bOk;
 }
@@ -1013,11 +1120,38 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
             _UpdateTrayIcon();
             _ShowContextMenu();
             break;
-        case WM_LBUTTONUP:
+
         case WM_LBUTTONDBLCLK:
+            // Doppelklick: Verbinden / Trennen (Toggle)
+            // WM_LBUTTONUP wird von Windows VOR WM_LBUTTONDBLCLK gesendet.
+            // Um den Doppelklick-Bug zu vermeiden (zweifaches Auslösen),
+            // nutzen wir einen Timer: beim ersten LBUTTONUP setzen wir einen
+            // kurzen Timer (300ms). Wenn innerhalb dieser Zeit ein LBUTTONDBLCLK
+            // kommt, canceln wir den Timer und führen die Aktion nur einmal aus.
+            // Implementierung: Doppelklick führt direkt aus, LBUTTONUP prüft ob
+            // ein Doppelklick folgt. Wir nutzen GetDoubleClickTime() dafür.
+            KillTimer(hWnd, 2);  // Cancel pending single-click timer
             _RefreshStatus();
-            if (_bConnected) _Disconnect();
-            else             _Connect(_nSelectedProfile);
+            if (_nProfiles == 0)
+            {
+                // Kein Profil: Importdialog öffnen
+                _ImportProfile();
+            }
+            else if (_bConnected)
+            {
+                _Disconnect();
+            }
+            else
+            {
+                _Connect(_nSelectedProfile);
+            }
+            break;
+
+        case WM_LBUTTONUP:
+            // Single-click: verzögert ausführen um Doppelklick zu erkennen.
+            // SetTimer mit GetDoubleClickTime() – wenn kein Doppelklick folgt,
+            // wird WM_TIMER (ID=2) ausgelöst und die Aktion ausgeführt.
+            SetTimer(hWnd, 2, GetDoubleClickTime(), nullptr);
             break;
         }
         return 0;
@@ -1048,12 +1182,12 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
             PostQuitMessage(0);
             return 0;
         }
+        // Profil auswählen (OHNE verbinden) – nur Selektion ändern
         if (uCmd >= IDM_PROFILE_BASE &&
             uCmd < static_cast<UINT>(IDM_PROFILE_BASE + _nProfiles))
         {
-            _nSelectedProfile = static_cast<int>(uCmd - IDM_PROFILE_BASE);
-            _RefreshStatus();
-            _UpdateTrayIcon();
+            int iSel = static_cast<int>(uCmd - IDM_PROFILE_BASE);
+            _SelectProfile(iSel);
             return 0;
         }
         break;
@@ -1065,10 +1199,30 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
             _UpdateTrayIcon();
             _CheckAndRemoveWireGuardShortcut();
         }
+        else if (wParam == 2)
+        {
+            // Single-click timer abgelaufen (kein Doppelklick folgte):
+            // Verbinden / Trennen ausführen
+            KillTimer(hWnd, 2);
+            _RefreshStatus();
+            if (_nProfiles == 0)
+            {
+                _ImportProfile();
+            }
+            else if (_bConnected)
+            {
+                _Disconnect();
+            }
+            else
+            {
+                _Connect(_nSelectedProfile);
+            }
+        }
         return 0;
 
     case WM_DESTROY:
         KillTimer(hWnd, TIMER_REFRESH_ID);
+        KillTimer(hWnd, 2);  // Single-click delayed action timer
         _RemoveTrayIcon();
         PostQuitMessage(0);
         return 0;
@@ -1286,8 +1440,9 @@ void WireGuardTrayApp::_ImportProfile()
     WCHAR* pExt = wcsrchr(wszProfile, L'.');
     if (pExt) *pExt = L'\0';
 
-    WCHAR wszLog[MAX_PATH_WGCP + 32] = {};
-    StringCchPrintfW(wszLog, ARRAYSIZE(wszLog), L"Tray: Import copied OK: %s", wszProfile);
+    WCHAR wszLog[MAX_PATH_WGCP + 64] = {};
+    StringCchPrintfW(wszLog, ARRAYSIZE(wszLog),
+        L"Tray: Profile '%s' copied to config directory - starting encryption", wszProfile);
     LOG_DEBUG(wszLog);
 
     // --- NEW: Encrypt .conf -> .conf.dpapi via WireGuardManager ---
@@ -1494,8 +1649,9 @@ DWORD WINAPI WireGuardTrayApp::_WatcherThread(LPVOID lpParam)
 
             if (wc.found)
             {
-                WCHAR d[64] = {};
-                StringCchPrintfW(d, 64, L"Tray: WireGuard UI detected (PID %lu) - closing", dwPid);
+                WCHAR d[96] = {};
+                StringCchPrintfW(d, ARRAYSIZE(d),
+                    L"Tray: WireGuard UI process detected (PID %lu) - terminating to prevent conflict", dwPid);
                 LOG_WARN(d);
 
                 // Step 1: Send WM_CLOSE to all windows so the process can
@@ -1676,13 +1832,18 @@ DWORD WINAPI WireGuardTrayApp::_SmartcardWatchThread(LPVOID lpParam)
         {
             // Card just inserted
             StringCchCopyW(wszReader, 256, wszFoundReader);
-            LOG_DEBUG(L"SC Watcher: Card inserted");
+            WCHAR dIns[320] = {};
+            StringCchPrintfW(dIns, ARRAYSIZE(dIns), L"SC Watcher: Card inserted in reader '%s'", wszReader);
+            LOG_DEBUG(dIns);
 
             if (pApp->_scConfig.bConnectOnInsert && !pApp->_bConnected
                 && pApp->_nProfiles > 0)
             {
-                LOG_DEBUG(L"SC Watcher: Auto-connect triggered");
-                // Post connect command to main window thread (thread-safe)
+                WCHAR dAC[MAX_PATH_WGCP + 64] = {};
+                StringCchPrintfW(dAC, ARRAYSIZE(dAC),
+                    L"SC Watcher: Auto-connect triggered for profile '%s'",
+                    pApp->_rgProfiles[pApp->_nSelectedProfile]);
+                LOG_DEBUG(dAC);
                 PostMessageW(pApp->_hWnd, WM_COMMAND,
                              MAKEWPARAM(IDM_CONNECT, 0), 0);
             }
@@ -1690,11 +1851,13 @@ DWORD WINAPI WireGuardTrayApp::_SmartcardWatchThread(LPVOID lpParam)
         else if (!bCardPresent && bCardWasPresentLastTick)
         {
             // Card just removed
-            LOG_DEBUG(L"SC Watcher: Card removed");
+            WCHAR dRem[320] = {};
+            StringCchPrintfW(dRem, ARRAYSIZE(dRem), L"SC Watcher: Card removed from reader '%s'", wszReader);
+            LOG_DEBUG(dRem);
 
             if (pApp->_scConfig.bDisconnectOnRemove && pApp->_bConnected)
             {
-                LOG_DEBUG(L"SC Watcher: Auto-disconnect triggered");
+                LOG_DEBUG(L"SC Watcher: Auto-disconnect triggered due to card removal");
                 PostMessageW(pApp->_hWnd, WM_COMMAND,
                              MAKEWPARAM(IDM_DISCONNECT, 0), 0);
             }
@@ -1747,57 +1910,99 @@ DWORD WINAPI WireGuardTrayApp::_NetworkWatchThread(LPVOID lpParam)
     WireGuardTrayApp* pApp = reinterpret_cast<WireGuardTrayApp*>(lpParam);
     LOG_DEBUG(L"NetWatch: Thread running");
 
-    bool bWasOnCorp = false;
+    // Initialer Corporate-Network-Check vor der ersten Schleifenrunde.
+    // Ohne das würde beim Start bOnCorp=false sein und ein bereits aktiver
+    // Tunnel sofort einen Handshake-Timeout auslösen, obwohl der PC im
+    // Firmennetz ist (z.B. VM direkt nach Login mit aktivem Tunnel).
+    bool bWasOnCorp = WGCPIsOnCorporateNetwork();
+    if (bWasOnCorp)
+        LOG_DEBUG(L"NetWatch: Initial check - corporate network detected at startup");
+    else
+        LOG_DEBUG(L"NetWatch: Initial check - not on corporate network at startup");
+
+    int nHandshakeFailCount = 0;
 
     while (WaitForSingleObject(pApp->_hNetWatchStop, 10000) == WAIT_TIMEOUT)
     {
         bool bOnCorp = WGCPIsOnCorporateNetwork();
 
-        // Handshake timeout check
+        // Handshake-WARN nur loggen wenn nicht im Firmennetz (dort kein Handshake erwartet)
         if (pApp->_bConnected && pApp->_dwHandshakeTimeoutSec > 0
-            && pApp->_nProfiles > 0)
+            && pApp->_nProfiles > 0
+            && !bOnCorp)
         {
             LONGLONG llAge = WGGetLastHandshakeSec(
                 pApp->_wszWgExePath,
                 pApp->_rgProfiles[pApp->_nSelectedProfile]);
-            if (llAge > static_cast<LONGLONG>(pApp->_dwHandshakeTimeoutSec))
-            {
-                WCHAR d[128] = {};
-                StringCchPrintfW(d, 128,
-                    L"Handshake timeout: last handshake %lld s ago (limit %lu s) - disconnecting tunnel",
-                    llAge, pApp->_dwHandshakeTimeoutSec);
-                LOG_CRIT(d);
-                PostMessageW(pApp->_hWnd, WM_COMMAND,
-                             MAKEWPARAM(IDM_DISCONNECT, 0), 0);
 
-                // Balloon notification
-                pApp->_ShowBalloon(L"WireGuard VPN",
-                    T(L"Verbindung getrennt: Kein Handshake.",
-                      L"Disconnected: Handshake timeout."),
-                    NIIF_WARNING);
+            if (llAge == -1)
+            {
+                nHandshakeFailCount = 0;
+            }
+            else if (llAge > static_cast<LONGLONG>(pApp->_dwHandshakeTimeoutSec))
+            {
+                nHandshakeFailCount++;
+                WCHAR d[160] = {};
+                StringCchPrintfW(d, ARRAYSIZE(d),
+                    L"Handshake: last handshake %lld s ago (limit %lu s), consecutive=%d",
+                    llAge, pApp->_dwHandshakeTimeoutSec, nHandshakeFailCount);
+                LOG_WARN(d);
+
+                if (nHandshakeFailCount >= 2)
+                {
+                    WCHAR dC[160] = {};
+                    StringCchPrintfW(dC, ARRAYSIZE(dC),
+                        L"Handshake timeout confirmed (%d checks) - disconnecting tunnel '%s'",
+                        nHandshakeFailCount,
+                        pApp->_rgProfiles[pApp->_nSelectedProfile]);
+                    LOG_CRIT(dC);
+
+                    nHandshakeFailCount = 0;
+                    PostMessageW(pApp->_hWnd, WM_COMMAND,
+                                 MAKEWPARAM(IDM_DISCONNECT, 0), 0);
+
+                    pApp->_ShowBalloon(L"WireGuard VPN",
+                        T(L"Verbindung getrennt: Kein Handshake.",
+                          L"Disconnected: Handshake timeout."),
+                        NIIF_WARNING);
+                }
+            }
+            else
+            {
+                nHandshakeFailCount = 0;
             }
         }
-
-        if (bOnCorp && !bWasOnCorp)
+        else if (bOnCorp)
         {
-            LOG_DEBUG(L"NetWatch: Corporate network detected");
+            nHandshakeFailCount = 0;
+        }
 
-            // Auto-disconnect if tunnel is active
-            if (pApp->_bConnected && pApp->_nProfiles > 0)
-            {
-                LOG_DEBUG(L"NetWatch: Auto-disconnect triggered (corporate network)");
-                PostMessageW(pApp->_hWnd, WM_COMMAND,
-                             MAKEWPARAM(IDM_DISCONNECT, 0), 0);
+        // Corporate-Network-Disconnect: bei JEDEM Check trennen wenn verbunden.
+        // Nicht nur beim Übergang – sonst greift es nicht wenn der Nutzer
+        // manuell verbindet während er schon im Firmennetz ist.
+        if (bOnCorp && pApp->_bConnected && pApp->_nProfiles > 0)
+        {
+            LOG_DEBUG(L"NetWatch: Corporate network active and tunnel connected - disconnecting");
+            PostMessageW(pApp->_hWnd, WM_COMMAND,
+                         MAKEWPARAM(IDM_DISCONNECT, 0), 0);
+            pApp->_ShowBalloon(L"WireGuard VPN",
+                T(L"Firmennetz erkannt \u2013 VPN getrennt.",
+                  L"Corporate network detected \u2013 VPN disconnected."),
+                NIIF_INFO, 8000);
+        }
 
-                pApp->_ShowBalloon(L"WireGuard VPN",
-                    T(L"Firmennetz erkannt \u2013 VPN getrennt.",
-                      L"Corporate network detected \u2013 VPN disconnected."),
-                    NIIF_INFO);
-            }
+        // Balloon nur beim Übergang false→true ohne aktive Verbindung
+        if (bOnCorp && !bWasOnCorp && !pApp->_bConnected)
+        {
+            LOG_DEBUG(L"NetWatch: Corporate network detected (transition, VPN not active)");
+            pApp->_ShowBalloon(L"WireGuard VPN",
+                T(L"Firmennetz erkannt \u2013 kein VPN erforderlich.",
+                  L"Corporate network detected \u2013 no VPN required."),
+                NIIF_INFO, 8000);
         }
         else if (!bOnCorp && bWasOnCorp)
         {
-            LOG_DEBUG(L"NetWatch: Left corporate network");
+            LOG_DEBUG(L"NetWatch: Left corporate network - VPN is now available again");
         }
 
         bWasOnCorp = bOnCorp;

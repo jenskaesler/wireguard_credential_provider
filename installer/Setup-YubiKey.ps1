@@ -22,12 +22,244 @@ function Write-Step { param($msg) Write-Host "`n[>] $msg" -ForegroundColor Cyan 
 function Write-Ok   { param($msg) Write-Host "    [OK] $msg" -ForegroundColor Green }
 function Write-Warn { param($msg) Write-Host "    [!!] $msg" -ForegroundColor Yellow }
 function Write-Fail { param($msg) Write-Host "`n[FEHLER] $msg" -ForegroundColor Red; exit 1 }
+function Write-Info { param($msg) Write-Host "    [i]  $msg" -ForegroundColor DarkGray }
 
 function Write-Header {
     Clear-Host
     Write-Host "============================================================" -ForegroundColor DarkCyan
     Write-Host "  WireGuard Credential Provider - YubiKey PIV Tool" -ForegroundColor Cyan
     Write-Host "============================================================" -ForegroundColor DarkCyan
+}
+
+# ---------------------------------------------------------------------------
+# Invoke-Ykman – robuster ykman-Wrapper
+# Führt ykman aus, fängt alle Ausgaben ab und gibt bei Fehler eine
+# klare Meldung aus statt rohe ykman-Fehlertexte durchzuleiten.
+# Rückgabe: [string] stdout-Ausgabe, oder $null bei Fehler
+# ---------------------------------------------------------------------------
+function Invoke-Ykman {
+    param(
+        [string[]]$Arguments,
+        [string]$ErrorContext = "ykman-Befehl"
+    )
+    try {
+        $output = & ykman @Arguments 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            # ykman selbst gibt oft hilfreiche Fehlertexte aus – diese anzeigen
+            $cleanOutput = ($output -replace '(?m)^\s+$','').Trim()
+            Write-Host ""
+            Write-Host "    [FEHLER] $ErrorContext fehlgeschlagen." -ForegroundColor Red
+            if ($cleanOutput) {
+                Write-Host "    Ykman-Meldung:" -ForegroundColor DarkGray
+                foreach ($line in ($cleanOutput -split "`n")) {
+                    $line = $line.TrimEnd()
+                    if ($line) { Write-Host "      $line" -ForegroundColor DarkGray }
+                }
+            }
+            return $null
+        }
+        return $output
+    } catch {
+        Write-Host ""
+        Write-Host "    [FEHLER] Unerwarteter Fehler beim Ausfuehren von ykman: $_" -ForegroundColor Red
+        return $null
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Get-YkmanVersion – ykman-Version lesen ohne Pipeline-Probleme
+# ---------------------------------------------------------------------------
+function Get-YkmanVersion {
+    try {
+        $v = & ykman --version 2>&1 | Out-String
+        return $v.Trim()
+    } catch {
+        return "(Version nicht lesbar)"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Test-Prerequisites – zentrale Voraussetzungsprüfung für alle Optionen
+# Prüft: Administrator-Rechte, ykman vorhanden
+# Gibt $true zurück wenn alle Voraussetzungen erfüllt sind.
+# ---------------------------------------------------------------------------
+function Test-Prerequisites {
+    $ok = $true
+
+    # Administrator-Rechte
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-Host ""
+        Write-Host "  [FEHLER] Dieses Skript muss als Administrator ausgefuehrt werden." -ForegroundColor Red
+        Write-Host "  Bitte das Skript per Rechtsklick > 'Als Administrator ausfuehren' starten." -ForegroundColor Yellow
+        $ok = $false
+    }
+
+    # ykman vorhanden
+    if (-not (Get-Command ykman -ErrorAction SilentlyContinue)) {
+        Write-Host ""
+        Write-Host "  [FEHLER] ykman (YubiKey Manager CLI) wurde nicht gefunden." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Loesung:" -ForegroundColor Yellow
+        Write-Host "  1. Installieren Sie den YubiKey Manager CLI:" -ForegroundColor White
+        Write-Host "     https://developers.yubico.com/yubikey-manager/" -ForegroundColor Cyan
+        Write-Host "  2. Oder starten Sie diesen PC neu nach einer Neuinstallation" -ForegroundColor White
+        Write-Host "     (PATH-Variable wird erst nach Neustart aktualisiert)." -ForegroundColor White
+        $ok = $false
+    }
+
+    return $ok
+}
+
+# ---------------------------------------------------------------------------
+# Get-YubiKeyInfo – YubiKey-Informationen lesen mit klarer Fehlerdiagnose
+# Gibt Hashtable mit Serial, Model zurueck, oder $null bei Fehler.
+# ---------------------------------------------------------------------------
+function Get-YubiKeyInfo {
+    $ykRaw = Invoke-Ykman -Arguments @('info') -ErrorContext "YubiKey-Info lesen"
+
+    if ($null -eq $ykRaw) {
+        Write-Host ""
+        Write-Host "  Moegliche Ursachen:" -ForegroundColor Yellow
+        Write-Host "  - Kein YubiKey eingesteckt" -ForegroundColor White
+        Write-Host "  - YubiKey wird von einer anderen Anwendung verwendet (z.B. Browser)" -ForegroundColor White
+        Write-Host "  - USB-Verbindung unterbrochen (YubiKey abstecken und neu einstecken)" -ForegroundColor White
+        Write-Host "  - Fehlender oder veralteter YubiKey-Treiber" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  Treiber-Loesung:" -ForegroundColor Yellow
+        Write-Host "  Installieren Sie den YubiKey Minidriver:" -ForegroundColor White
+        Write-Host "  https://www.yubico.com/support/download/smart-card-drivers-tools/" -ForegroundColor Cyan
+        return $null
+    }
+
+    # Prüfen ob ykman erfolgreich war aber keinen YubiKey gefunden hat
+    # (kann auf manchen Systemen passieren wenn der USB-Treiber fehlt)
+    if ($ykRaw -match 'No YubiKey' -or $ykRaw -match 'ERROR' -or $ykRaw -match 'No device') {
+        Write-Host ""
+        Write-Host "  [FEHLER] Kein YubiKey erkannt." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  ykman meldet: $($ykRaw.Trim())" -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "  Loesung:" -ForegroundColor Yellow
+        Write-Host "  1. YubiKey einstecken und erneut versuchen" -ForegroundColor White
+        Write-Host "  2. Bei 'No module' oder Treiberfehler: YubiKey Minidriver installieren" -ForegroundColor White
+        Write-Host "     https://www.yubico.com/support/download/smart-card-drivers-tools/" -ForegroundColor Cyan
+        return $null
+    }
+
+    # Seriennummer und Modell extrahieren – mit robuster Null-Prüfung
+    $serialMatch = $ykRaw | Select-String 'Serial number:\s*(\d+)'
+    $modelMatch  = $ykRaw | Select-String 'Device type:\s*(.+)'
+
+    $serial = if ($serialMatch -and $serialMatch.Matches.Count -gt 0 -and
+                   $serialMatch.Matches[0].Groups.Count -gt 1) {
+        $serialMatch.Matches[0].Groups[1].Value.Trim()
+    } else { '(unbekannt)' }
+
+    $model = if ($modelMatch -and $modelMatch.Matches.Count -gt 0 -and
+                  $modelMatch.Matches[0].Groups.Count -gt 1) {
+        $modelMatch.Matches[0].Groups[1].Value.Trim()
+    } else { '(unbekannt)' }
+
+    return @{ Serial = $serial; Model = $model; RawInfo = $ykRaw }
+}
+
+# ---------------------------------------------------------------------------
+# Test-PivSupport – prüft ob PIV vorhanden UND aktiviert ist
+# ---------------------------------------------------------------------------
+function Test-PivSupport {
+    param([hashtable]$YkInfo)
+
+    $raw = $YkInfo.RawInfo
+
+    # Prüfen ob PIV in der Ausgabe erwähnt wird
+    if ($raw -notmatch 'PIV') {
+        Write-Host ""
+        Write-Host "  [FEHLER] Dieser YubiKey meldet keine PIV-Unterstuetzung." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  ykman-Ausgabe (Anwendungen):" -ForegroundColor DarkGray
+        # Nur den Abschnitt mit den Anwendungen ausgeben
+        $raw -split "`n" | Where-Object { $_ -match 'Applications|PIV|FIDO|OTP|OATH|OpenPGP' } |
+            ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        Write-Host ""
+        Write-Host "  Hinweis:" -ForegroundColor Yellow
+        Write-Host "  - YubiKey 5-Serie unterstuetzt PIV. YubiKey Bio und Security Key NICHT." -ForegroundColor White
+        Write-Host "  - Vergleich unter: https://www.yubico.com/store/compare/" -ForegroundColor Cyan
+        return $false
+    }
+
+    # Prüfen ob PIV deaktiviert ist (manche YubiKeys haben PIV disabled)
+    if ($raw -match 'PIV\s*\n?\s*Enabled:\s*False' -or $raw -match 'PIV.*disabled') {
+        Write-Host ""
+        Write-Host "  [FEHLER] PIV ist auf diesem YubiKey deaktiviert." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Loesung:" -ForegroundColor Yellow
+        Write-Host "  PIV aktivieren mit: ykman config usb --enable PIV" -ForegroundColor Cyan
+        Write-Host "  Danach den YubiKey abstecken und neu einstecken." -ForegroundColor White
+        return $false
+    }
+
+    return $true
+}
+
+# ---------------------------------------------------------------------------
+# Get-PivCertificate – Zertifikat aus Slot 9a lesen mit Fehlerdiagnose
+# Gibt Hashtable mit Thumbprint, NotAfter zurueck, oder $null bei Fehler.
+# ---------------------------------------------------------------------------
+function Get-PivCertificate {
+    param([string]$Slot = '9a')
+
+    $certFile = [System.IO.Path]::GetTempFileName() + ".pem"
+
+    $result = Invoke-Ykman -Arguments @('piv', 'certificates', 'export', $Slot, $certFile) `
+                           -ErrorContext "Zertifikat aus Slot $Slot lesen"
+
+    if ($null -eq $result) {
+        # Temp-Datei aufräumen falls ykman sie teilweise erstellt hat
+        Remove-Item $certFile -Force -ErrorAction SilentlyContinue
+
+        Write-Host ""
+        Write-Host "  Moegliche Ursachen fuer Slot $Slot:" -ForegroundColor Yellow
+        Write-Host "  - Slot $Slot ist leer (kein Zertifikat vorhanden)" -ForegroundColor White
+        Write-Host "    -> Loesung: Option 1 'YubiKey initialisieren' ausfuehren" -ForegroundColor DarkGray
+        Write-Host "  - PIV-Treiber (Minidriver) fehlt oder ist nicht korrekt installiert" -ForegroundColor White
+        Write-Host "    -> Loesung: YubiKey Minidriver installieren, dann Neustart" -ForegroundColor DarkGray
+        Write-Host "     https://www.yubico.com/support/download/smart-card-drivers-tools/" -ForegroundColor Cyan
+        Write-Host "  - YubiKey wurde nach der Treiberinstallation nicht neu eingesteckt" -ForegroundColor White
+        return $null
+    }
+
+    # Zertifikat laden
+    try {
+        if (-not (Test-Path $certFile) -or (Get-Item $certFile).Length -eq 0) {
+            Write-Host ""
+            Write-Host "  [FEHLER] ykman hat keine Zertifikatsdatei erzeugt." -ForegroundColor Red
+            Write-Host "  Slot $Slot ist moeglicherweise leer." -ForegroundColor Yellow
+            Remove-Item $certFile -Force -ErrorAction SilentlyContinue
+            return $null
+        }
+
+        $cert       = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certFile)
+        $thumbprint = $cert.Thumbprint
+        $notAfter   = $cert.NotAfter
+        Remove-Item $certFile -Force -ErrorAction SilentlyContinue
+
+        if ([string]::IsNullOrWhiteSpace($thumbprint)) {
+            Write-Host ""
+            Write-Host "  [FEHLER] Zertifikat geladen, aber Thumbprint ist leer." -ForegroundColor Red
+            Write-Host "  Das Zertifikat in Slot $Slot koennte beschaedigt sein." -ForegroundColor Yellow
+            return $null
+        }
+
+        return @{ Thumbprint = $thumbprint; NotAfter = $notAfter }
+    } catch {
+        Remove-Item $certFile -Force -ErrorAction SilentlyContinue
+        Write-Host ""
+        Write-Host "  [FEHLER] Zertifikatsdatei konnte nicht gelesen werden: $_" -ForegroundColor Red
+        Write-Host "  Moeglicherweise ist das Zertifikat in Slot $Slot beschaedigt." -ForegroundColor Yellow
+        return $null
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -201,22 +433,30 @@ function Invoke-Initialize {
 
     # Voraussetzungen
     Write-Step "Pruefe Voraussetzungen..."
-    if (-not (Get-Command ykman -ErrorAction SilentlyContinue)) {
-        Write-Fail "ykman nicht gefunden. Bitte installieren: https://developers.yubico.com/yubikey-manager/"
+    if (-not (Test-Prerequisites)) {
+        Write-Host ""
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
     }
-    Write-Ok "ykman gefunden: $(ykman --version)"
-
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator)
-    if (-not $isAdmin) { Write-Fail "Bitte als Administrator ausfuehren." }
+    Write-Ok "ykman gefunden: $(Get-YkmanVersion)"
     Write-Ok "Laeuft als Administrator"
 
-    $ykInfo = ykman info 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { Write-Fail "Kein YubiKey gefunden. Bitte YubiKey einstecken." }
-    $serial = ($ykInfo | Select-String 'Serial number:\s*(\d+)').Matches.Groups[1].Value
-    $model  = ($ykInfo | Select-String 'Device type:\s*(.+)').Matches.Groups[1].Value.Trim()
+    # YubiKey erkennen
+    Write-Step "Suche YubiKey..."
+    $ykInfo = Get-YubiKeyInfo
+    if ($null -eq $ykInfo) {
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
+    }
+    $serial = $ykInfo.Serial
+    $model  = $ykInfo.Model
     Write-Ok "Modell: $model | Seriennummer: $serial"
-    if ($ykInfo -notmatch 'PIV') { Write-Fail "Dieser YubiKey unterstuetzt keine PIV-Anwendung." }
+
+    # PIV-Unterstuetzung prüfen
+    if (-not (Test-PivSupport -YkInfo $ykInfo)) {
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
+    }
     Write-Ok "PIV-Unterstuetzung bestaetigt"
 
     # Benutzerdaten
@@ -258,55 +498,88 @@ function Invoke-Initialize {
 
     # PIV Reset
     Write-Step "Setze PIV-Anwendung zurueck..."
-    ykman piv reset --force 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Fail "PIV-Reset fehlgeschlagen." }
+    $r = Invoke-Ykman -Arguments @('piv','reset','--force') -ErrorContext "PIV-Reset"
+    if ($null -eq $r) {
+        Write-Warn "PIV-Reset fehlgeschlagen. YubiKey abstecken, neu einstecken und erneut versuchen."
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
+    }
     Write-Ok "PIV-Anwendung zurueckgesetzt"
 
     # PIN / PUK / Management Key
     Write-Step "Setze PIN..."
-    ykman piv access change-pin --pin 123456 --new-pin $pin 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Fail "PIN-Aenderung fehlgeschlagen." }
+    $r = Invoke-Ykman -Arguments @('piv','access','change-pin','--pin','123456','--new-pin',$pin) `
+                      -ErrorContext "PIN setzen"
+    if ($null -eq $r) {
+        Write-Warn "PIN konnte nicht gesetzt werden."
+        Write-Info "Moegliche Ursache: Standard-PIN (123456) wurde bereits geaendert."
+        Write-Info "Bitte PIV-Reset wiederholen (Abbruch und Option 1 neu starten)."
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
+    }
     Write-Ok "PIN gesetzt"
 
     Write-Step "Setze PUK..."
-    ykman piv access change-puk --puk 12345678 --new-puk $puk 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Warn "PUK-Aenderung fehlgeschlagen." } else { Write-Ok "PUK gesetzt" }
+    $r = Invoke-Ykman -Arguments @('piv','access','change-puk','--puk','12345678','--new-puk',$puk) `
+                      -ErrorContext "PUK setzen"
+    if ($null -eq $r) { Write-Warn "PUK-Aenderung fehlgeschlagen (nicht kritisch, PUK bleibt Standard)." }
+    else               { Write-Ok "PUK gesetzt" }
 
     Write-Step "Setze Management Key..."
-    ykman piv access change-management-key `
-        --management-key 010203040506070801020304050607080102030405060708 `
-        --new-management-key $mgmtKey `
-        --force 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Warn "Management Key nicht geaendert." } else { Write-Ok "Management Key gesetzt" }
+    $r = Invoke-Ykman -Arguments @('piv','access','change-management-key',
+                        '--management-key','010203040506070801020304050607080102030405060708',
+                        '--new-management-key',$mgmtKey,'--force') `
+                      -ErrorContext "Management Key setzen"
+    if ($null -eq $r) { Write-Warn "Management Key nicht geaendert (nicht kritisch)." }
+    else               { Write-Ok "Management Key gesetzt" }
 
     # Schluessel + Zertifikat
     Write-Step "Generiere RSA2048-Schluessel in Slot 9a..."
     $pubkeyFile = [System.IO.Path]::GetTempFileName() + ".pem"
-    ykman piv keys generate --algorithm RSA2048 --pin-policy once --touch-policy never `
-        --management-key $mgmtKey 9a $pubkeyFile 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Fail "Schluesselgenerierung fehlgeschlagen." }
+    $r = Invoke-Ykman -Arguments @('piv','keys','generate',
+                        '--algorithm','RSA2048','--pin-policy','once','--touch-policy','never',
+                        '--management-key',$mgmtKey,'9a',$pubkeyFile) `
+                      -ErrorContext "RSA2048-Schluessel generieren"
+    if ($null -eq $r) {
+        Remove-Item $pubkeyFile -Force -ErrorAction SilentlyContinue
+        Write-Host ""
+        Write-Host "  Moegliche Ursachen:" -ForegroundColor Yellow
+        Write-Host "  - YubiKey 4 unterstuetzt RSA2048 nur in Slot 9a (sollte funktionieren)" -ForegroundColor White
+        Write-Host "  - Falscher Management Key (YubiKey war moeglicherweise schon konfiguriert)" -ForegroundColor White
+        Write-Host "    -> Loesung: PIV komplett zuruecksetzen (Option 1 neu starten)" -ForegroundColor DarkGray
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
+    }
     Write-Ok "RSA2048-Schluessel generiert"
 
     Write-Step "Erstelle selbstsigniertes Zertifikat (10 Jahre)..."
-    ykman piv certificates generate `
-        --subject "CN=$($user.CertCN)" `
-        --valid-days 3650 `
-        --management-key $mgmtKey `
-        --pin $pin `
-        9a $pubkeyFile 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Fail "Zertifikatserstellung fehlgeschlagen." }
-    Write-Ok "Zertifikat erstellt"
+    $r = Invoke-Ykman -Arguments @('piv','certificates','generate',
+                        '--subject',"CN=$($user.CertCN)",
+                        '--valid-days','3650',
+                        '--management-key',$mgmtKey,
+                        '--pin',$pin,
+                        '9a',$pubkeyFile) `
+                      -ErrorContext "Selbstsigniertes Zertifikat erstellen"
     Remove-Item $pubkeyFile -Force -ErrorAction SilentlyContinue
+    if ($null -eq $r) {
+        Write-Host ""
+        Write-Host "  Moegliche Ursachen:" -ForegroundColor Yellow
+        Write-Host "  - PIN-Eingabe abgelaufen oder PIN gesperrt" -ForegroundColor White
+        Write-Host "  - Management Key stimmt nicht ueberein" -ForegroundColor White
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
+    }
+    Write-Ok "Zertifikat erstellt"
 
     # Thumbprint
     Write-Step "Lese Zertifikat-Thumbprint..."
-    $certFile = [System.IO.Path]::GetTempFileName() + ".pem"
-    ykman piv certificates export 9a $certFile 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Fail "Zertifikatsexport fehlgeschlagen." }
-    $cert       = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certFile)
-    $thumbprint = $cert.Thumbprint
-    $notAfter   = $cert.NotAfter
-    Remove-Item $certFile -Force -ErrorAction SilentlyContinue
+    $certData = Get-PivCertificate -Slot '9a'
+    if ($null -eq $certData) {
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
+    }
+    $thumbprint = $certData.Thumbprint
+    $notAfter   = $certData.NotAfter
     Write-Ok "Thumbprint: $thumbprint"
     Write-Ok "Gueltig bis: $($notAfter.ToString('dd.MM.yyyy'))"
 
@@ -316,12 +589,12 @@ function Invoke-Initialize {
     if (-not (Test-Path 'HKLM:\SOFTWARE\Jens Kaesler')) { New-Item 'HKLM:\SOFTWARE\Jens Kaesler' -Force | Out-Null }
     if (-not (Test-Path $regKey)) { New-Item $regKey -Force | Out-Null }
 
-    Set-ItemProperty -Path $regKey -Name 'SmartcardEnabled'            -Value 1          -Type DWord
+    Set-ItemProperty -Path $regKey -Name 'SmartcardEnabled'            -Value 1           -Type DWord
     Set-ItemProperty -Path $regKey -Name 'SmartcardCertThumbprint'     -Value $thumbprint -Type String
     Set-ItemProperty -Path $regKey -Name 'SmartcardPinRequired'        -Value $pinRequired -Type DWord
-    Set-ItemProperty -Path $regKey -Name 'SmartcardPinMinLength'       -Value 8          -Type DWord
-    Set-ItemProperty -Path $regKey -Name 'SmartcardConnectOnInsert'    -Value 0          -Type DWord
-    Set-ItemProperty -Path $regKey -Name 'SmartcardDisconnectOnRemove' -Value 1          -Type DWord
+    Set-ItemProperty -Path $regKey -Name 'SmartcardPinMinLength'       -Value 8           -Type DWord
+    Set-ItemProperty -Path $regKey -Name 'SmartcardConnectOnInsert'    -Value 0           -Type DWord
+    Set-ItemProperty -Path $regKey -Name 'SmartcardDisconnectOnRemove' -Value 1           -Type DWord
     Write-Ok "Registry aktualisiert"
 
     # Bericht
@@ -357,37 +630,42 @@ function Invoke-EncryptThumbprint {
     Write-Host "  Bestehenden YubiKey fuer diesen PC registrieren" -ForegroundColor Cyan
     Write-Host ""
 
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator)
-    if (-not $isAdmin) { Write-Fail "Bitte als Administrator ausfuehren." }
-
-    # Thumbprint direkt vom gesteckten YubiKey lesen
-    if (-not (Get-Command ykman -ErrorAction SilentlyContinue)) {
-        Write-Fail "ykman nicht gefunden. Bitte installieren: https://developers.yubico.com/yubikey-manager/"
+    if (-not (Test-Prerequisites)) {
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
     }
 
-    Write-Step "Lese Zertifikat aus YubiKey Slot 9a..."
-    $ykInfo = ykman info 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { Write-Fail "Kein YubiKey gefunden. Bitte YubiKey einstecken." }
-    $serial = ($ykInfo | Select-String 'Serial number:\s*(\d+)').Matches.Groups[1].Value
-    $model  = ($ykInfo | Select-String 'Device type:\s*(.+)').Matches.Groups[1].Value.Trim()
+    # YubiKey erkennen
+    Write-Step "Suche YubiKey..."
+    $ykInfo = Get-YubiKeyInfo
+    if ($null -eq $ykInfo) {
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
+    }
+    $serial = $ykInfo.Serial
+    $model  = $ykInfo.Model
     Write-Ok "YubiKey: $model (S/N: $serial)"
 
-    $certFile = [System.IO.Path]::GetTempFileName() + ".pem"
-    ykman piv certificates export 9a $certFile 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail "Kein Zertifikat in Slot 9a gefunden. YubiKey initialisieren (Option 1) oder Slot pruefen."
+    # PIV-Unterstuetzung prüfen
+    if (-not (Test-PivSupport -YkInfo $ykInfo)) {
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
     }
-    $cert       = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certFile)
-    $thumbprint = $cert.Thumbprint
-    Remove-Item $certFile -Force -ErrorAction SilentlyContinue
+
+    # Zertifikat aus Slot 9a lesen
+    Write-Step "Lese Zertifikat aus YubiKey Slot 9a..."
+    $certData = Get-PivCertificate -Slot '9a'
+    if ($null -eq $certData) {
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
+    }
+    $thumbprint = $certData.Thumbprint
     Write-Ok "Thumbprint: $thumbprint"
 
+    # Registry schreiben
     Write-Step "Schreibe Thumbprint in Registry..."
-    Write-Step "Schreibe in Registry..."
     Write-ThumbprintToRegistry -Thumbprint $thumbprint
 
-    # SmartcardEnabled aktivieren
     $regKey = "HKLM:\SOFTWARE\Jens Kaesler\WireGuard Credential Provider"
     if (-not (Test-Path "HKLM:\SOFTWARE\Jens Kaesler")) { New-Item "HKLM:\SOFTWARE\Jens Kaesler" -Force | Out-Null }
     if (-not (Test-Path $regKey)) { New-Item $regKey -Force | Out-Null }
@@ -414,30 +692,37 @@ function Invoke-ExportReport {
     Write-Host "  werden im Bericht als 'unbekannt' eingetragen." -ForegroundColor DarkGray
     Write-Host ""
 
-    # ykman pruefen
-    if (-not (Get-Command ykman -ErrorAction SilentlyContinue)) {
-        Write-Fail "ykman nicht gefunden. Bitte installieren: https://developers.yubico.com/yubikey-manager/"
+    if (-not (Test-Prerequisites)) {
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
     }
 
-    # YubiKey pruefen
+    # YubiKey erkennen
     Write-Step "Lese YubiKey-Informationen..."
-    $ykInfo = ykman info 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { Write-Fail "Kein YubiKey gefunden. Bitte YubiKey einstecken." }
-    $serial = ($ykInfo | Select-String 'Serial number:\s*(\d+)').Matches.Groups[1].Value
-    $model  = ($ykInfo | Select-String 'Device type:\s*(.+)').Matches.Groups[1].Value.Trim()
+    $ykInfo = Get-YubiKeyInfo
+    if ($null -eq $ykInfo) {
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
+    }
+    $serial = $ykInfo.Serial
+    $model  = $ykInfo.Model
     Write-Ok "Modell: $model | Seriennummer: $serial"
+
+    # PIV-Unterstuetzung prüfen
+    if (-not (Test-PivSupport -YkInfo $ykInfo)) {
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
+    }
 
     # Thumbprint vom YubiKey lesen
     Write-Step "Lese Zertifikat aus Slot 9a..."
-    $certFile = [System.IO.Path]::GetTempFileName() + ".pem"
-    ykman piv certificates export 9a $certFile 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail "Kein Zertifikat in Slot 9a gefunden. YubiKey wurde moeglicherweise noch nicht initialisiert."
+    $certData = Get-PivCertificate -Slot '9a'
+    if ($null -eq $certData) {
+        Read-Host "  [Enter] zurueck zum Menue"
+        return
     }
-    $cert       = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certFile)
-    $thumbprint = $cert.Thumbprint
-    $notAfter   = $cert.NotAfter
-    Remove-Item $certFile -Force -ErrorAction SilentlyContinue
+    $thumbprint = $certData.Thumbprint
+    $notAfter   = $certData.NotAfter
     Write-Ok "Thumbprint: $thumbprint"
     Write-Ok "Gueltig bis: $($notAfter.ToString('dd.MM.yyyy'))"
 
@@ -455,7 +740,7 @@ function Invoke-ExportReport {
         }
     } catch {}
 
-    # Bericht erstellen (ohne PIN/PUK/MgmtKey da nicht wiederherstellbar)
+    # Bericht erstellen
     $savePath = Save-Report -User $user -Serial $serial -Model $model `
         -Thumbprint $thumbprint -NotAfter $notAfter `
         -Pin "(nicht bekannt - nicht wiederherstellbar)" `

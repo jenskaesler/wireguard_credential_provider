@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
 [![Language](https://img.shields.io/badge/Language-C%2B%2B17-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-2026.8.3-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-2026.8.4-blue)](CHANGELOG.md)
 [![WireGuard](https://img.shields.io/badge/WireGuard-Windows-88171A?logo=wireguard&logoColor=white)](https://www.wireguard.com/install/)
 
 ---
@@ -52,7 +52,8 @@ Authentication flow:
 
 ### Post-Logon (Tray Application)
 - 🖥️ **System tray icon** – color-coded lock icon (green/red) reflecting tunnel state
-- 📋 **Profile management** – per-profile submenus with Activate / Disconnect / Delete actions; active profile and connection state shown in menu header
+- 📋 **Context menu** – Connect/Disconnect directly in main menu; per-profile submenus with Connect / Disconnect / Delete; active profile shown with ✓ checkmark and 🟢 dot
+- 🖱️ **Click behavior** – single click and double click both toggle connect/disconnect (one action, no duplicate triggers); left-click on profile entry selects without connecting
 - 🔒 **WireGuard UI blocker** – detects and silently terminates the WireGuard UI
 - 🔄 **Shortcut watchdog** – automatically removes the WireGuard Start Menu shortcut after updates
 - 📥 **Profile import** – imports `.conf` files, triggers WireGuardManager briefly to encrypt to `.conf.dpapi`, then removes the plain-text file; tray menu refreshes immediately after import
@@ -60,14 +61,12 @@ Authentication flow:
 - 🌙 **Dark Mode aware** – reads Windows theme preference and applies it to menus
 - 🪪 **YubiKey PIV** – same authentication gate as the pre-logon tile
 - 🔌 **Auto-disconnect** – disconnects tunnel when YubiKey is removed
-- 🤝 **Handshake watchdog** – disconnects if WireGuard handshake exceeds configurable timeout
+- 🤝 **Handshake watchdog** – disconnects if WireGuard handshake exceeds configurable timeout (default: 180 s); suppressed on corporate network where no handshake is expected
 - 🏢 **Corporate network detection** – auto-disconnects when the machine is physically on the corporate network
-  - Uses Windows NLA (`INetworkListManager`) – detects `DOMAIN_AUTHENTICATED` networks
-  - Pre-logon CP: blocks Connect when already on corporate network
-  - Post-logon Tray: auto-disconnects with balloon notification
-  - WireGuard virtual adapters are excluded to prevent false positives (VPN → DC reachable → wrong disconnect)
-  - Foreign domain networks (different company DC) are safe – Windows only sets `DOMAIN_AUTHENTICATED` for your own domain
-- 🖱️ **Left-click toggle** – click tray icon to connect/disconnect
+  - **Stage 1:** Windows NLA (`INetworkListManager`) – detects `DOMAIN_AUTHENTICATED` networks
+  - **Stage 2 fallback:** domain-join registry check + `DsGetDcName` + **route verification via `GetBestRoute`** – correctly handles VMs (Red Hat VirtIO, Hyper-V) where NLA reports `PRIVATE` instead of `DOMAIN_AUTHENTICATED`, and rejects the case where the DC is only reachable via the WireGuard tunnel (Homeoffice VPN)
+  - WireGuard virtual adapters excluded from both stages to prevent false positives
+  - Disconnect on every NetWatch tick when corporate + connected (not only on state transition)
 - 📊 **Rich tooltip** – status, profile, uptime, handshake age, traffic stats on hover
 
 ### Shared
@@ -194,14 +193,16 @@ Set-ExecutionPolicy Bypass -Scope Process
 | **3 – Export setup report** | Re-create setup report from inserted YubiKey |
 
 The script:
+- Validates prerequisites (`ykman` present, Administrator rights, YubiKey connected, PIV enabled)
 - Resets the PIV application
 - Generates a random 8-digit PIN and PUK
 - Creates an RSA2048 key pair in slot 9a
 - Issues a self-signed certificate (10 year validity)
 - Writes `SmartcardCertThumbprint` and `SmartcardEnabled=1` to the registry
 - Saves a setup report (including PIN/PUK) to a user-defined location
+- Returns to the menu on error (no `exit 1`) – retry without restarting the script
 
-> **Compatible YubiKey models:** 5 NFC, 5C, 5Ci, 5 Nano, 5C NFC, 5C Nano  
+> **Compatible YubiKey models:** 5 NFC, 5C, 5Ci, 5 Nano, 5C NFC, 5C Nano
 > **Not compatible:** YubiKey Bio, Security Key series, YubiKey 4 series
 
 ---
@@ -225,11 +226,14 @@ All settings: `HKEY_LOCAL_MACHINE\SOFTWARE\Jens Kaesler\WireGuard Credential Pro
 | `SmartcardDisconnectOnRemove` | REG_DWORD | Auto-disconnect when YubiKey removed | `0` |
 | `SmartcardConnectOnInsert` | REG_DWORD | Auto-connect when YubiKey inserted | `0` |
 | `SmartcardReaderName` | REG_SZ | Restrict to specific reader name | *(empty)* |
-| `HandshakeTimeoutSec` | REG_SZ | Disconnect if handshake older than N seconds (0=off) | `"0"` |
+| `HandshakeTimeoutSec` | REG_SZ | Disconnect if no handshake for N seconds (`"0"` = off) | `"180"` |
 | `LogLevel` | REG_SZ | `0`=off `1`=CRIT `2`=WARN `3`=DEBUG | `"1"` |
 | `LogRetentionDays` | REG_SZ | Auto-delete logs older than N days | `"7"` |
 | `ExePath` | REG_SZ | Path to `wireguard.exe` | `C:\Program Files\WireGuard\wireguard.exe` |
 | `ConfigDir` | REG_SZ | WireGuard configuration directory | `C:\Program Files\WireGuard\Data\Configurations\` |
+
+> **Note:** `LogLevel`, `LogRetentionDays` and `HandshakeTimeoutSec` are stored as `REG_SZ`.
+> Enter the decimal number as text in Registry Editor – no hex conversion needed.
 
 ---
 
@@ -245,7 +249,23 @@ Log files:
 - **Tray App:** `INSTDIR\logs\wgcp_ddMMyyyy.log`
 - **CP DLL (pre-logon):** `INSTDIR\logs\wgcp_ddMMyyyy.log` (same file)
 
-> Logs are only written when `INSTDIR` is accessible. No fallback to `C:\Windows\Temp`.
+**Corporate network detection not working on VM?**
+
+On VMs with Red Hat VirtIO or Hyper-V adapters, Windows NLA may classify the network as
+`PRIVATE` instead of `DOMAIN_AUTHENTICATED`. The Stage 2 fallback handles this automatically:
+it checks domain-join status, adapter connectivity, and calls `DsGetDcName` to verify DC
+reachability on the LAN. Enable `LogLevel=3` and look for `CorpNet: Stage2` log entries.
+
+**VPN disconnects immediately after connecting from Homeoffice?**
+
+This was a known bug (fixed in 2026.8.4). The route to the DC now goes through a route
+check (`GetBestRoute`): if the DC is only reachable via the WireGuard adapter, Stage 2
+returns `false` (not corporate) and the tunnel stays up.
+
+**Installer shows "file in use" dialog for WireGuardCPTray.exe?**
+
+This was fixed in 2026.8.4. The installer now uses `nsProcess::KillProcess` and waits
+with an active poll loop until the process is gone before copying new binaries.
 
 ---
 

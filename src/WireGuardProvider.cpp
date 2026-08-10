@@ -77,7 +77,6 @@ STDMETHODIMP WireGuardProvider::GetFieldDescriptorAt(
 STDMETHODIMP WireGuardProvider::GetCredentialCount(
     DWORD* pdwCount, DWORD* pdwDefault, BOOL* pbAutoLogonWithDefault)
 {
-    LOG_DEBUG(L"CP: GetCredentialCount called");
     if (_bRecreateEnumeratedCredentials)
         { _bRecreateEnumeratedCredentials=false; _EnumerateCredentials(); }
     *pdwCount=1; *pdwDefault=CREDENTIAL_PROVIDER_NO_DEFAULT;
@@ -99,17 +98,32 @@ HRESULT WireGuardProvider::_EnumerateCredentials()
 {
     if (_pCredential) { _pCredential->Release(); _pCredential=nullptr; }
     WireGuardCredential* p=new(std::nothrow) WireGuardCredential();
-    if (!p) return E_OUTOFMEMORY;
-    p->_pProvider = this;  // back-pointer
+    if (!p)
+    {
+        LOG_CRIT(L"CP: EnumerateCredentials out of memory - tile cannot be created");
+        return E_OUTOFMEMORY;
+    }
+    p->_pProvider = this;
     HRESULT hr=p->Initialize(_cpus,g_rgFields,g_rgFieldStates);
-    if (SUCCEEDED(hr)) _pCredential=p; else p->Release();
+    if (SUCCEEDED(hr))
+    {
+        _pCredential=p;
+        LOG_DEBUG(L"CP: Credential tile created successfully");
+    }
+    else
+    {
+        WCHAR e[64]={};
+        StringCchPrintfW(e, 64, L"CP: Credential Initialize failed hr=0x%08X", hr);
+        LOG_CRIT(e);
+        p->Release();
+    }
     return hr;
 }
 
 HRESULT WireGuardProvider_CreateInstance(REFIID riid, void** ppv)
 {
     WireGuardProvider* p=new(std::nothrow) WireGuardProvider();
-    if (!p) { LOG_DEBUG(L"CP: CreateInstance OOM"); return E_OUTOFMEMORY; }
+    if (!p) { LOG_CRIT(L"CP: CreateInstance out of memory - credential provider cannot be loaded"); return E_OUTOFMEMORY; }
     HRESULT hr=p->QueryInterface(riid,ppv);
     p->Release();
     return hr;
