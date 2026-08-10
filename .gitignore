@@ -30,3 +30,4 @@ installer/content/*.dll
 
 # Logs
 *.log
+docs/
