@@ -1,4 +1,4 @@
-//
+﻿//
 // WireGuardTray.cpp
 //
 // Post-logon WireGuard Tray Application.
@@ -65,6 +65,7 @@ WireGuardTrayApp::WireGuardTrayApp()
     ZeroMemory(_rgProfiles,        sizeof(_rgProfiles));
     ZeroMemory(_wszPin,            sizeof(_wszPin));
     ZeroMemory(_wszScStatusMsg,    sizeof(_wszScStatusMsg));
+    ZeroMemory(_wszYkSerial,       sizeof(_wszYkSerial));
 }
 
 WireGuardTrayApp::~WireGuardTrayApp()
@@ -389,204 +390,173 @@ void WireGuardTrayApp::_ShowContextMenu()
     if (!hMenu) return;
 
     // -----------------------------------------------------------------------
-    // Header: App-Name (ausgegraut, nur zur Orientierung)
+    // Header: App-Name (ausgegraut)
     // -----------------------------------------------------------------------
     AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0,
         L"\U0001F512  WireGuard VPN");
 
-    // Status + aktives Profil (ausgegraut, informativer Text)
+    // -----------------------------------------------------------------------
+    // Status-Zeile: Verbindungsstatus + Profilname + ggf. Laufzeit
+    // -----------------------------------------------------------------------
     {
-        WCHAR wszStatus[MAX_PATH_WGCP + 64] = {};
+        WCHAR wszStatus[MAX_PATH_WGCP + 128] = {};
         if (_nProfiles > 0)
         {
-            StringCchPrintfW(wszStatus, ARRAYSIZE(wszStatus),
-                T(L"Status: %s  |  Profil: %s",
-                  L"Status: %s  |  Profile: %s"),
-                T(_bConnected ? L"Verbunden" : L"Getrennt",
-                  _bConnected ? L"Connected" : L"Disconnected"),
-                _rgProfiles[_nSelectedProfile]);
+            if (_bConnected)
+            {
+                WCHAR wszTimer[MAX_LABEL_WGCP] = {};
+                WGGetConnectedSince(_rgProfiles[_nSelectedProfile], wszTimer, MAX_LABEL_WGCP);
+                if (wszTimer[0])
+                    StringCchPrintfW(wszStatus, ARRAYSIZE(wszStatus),
+                        T(L"\U0001F7E2 Verbunden  \u2013  %s", L"\U0001F7E2 Connected  \u2013  %s"),
+                        wszTimer);
+                else
+                    StringCchPrintfW(wszStatus, ARRAYSIZE(wszStatus),
+                        T(L"\U0001F7E2 Verbunden  \u2013  %s", L"\U0001F7E2 Connected  \u2013  %s"),
+                        _rgProfiles[_nSelectedProfile]);
+            }
+            else
+            {
+                StringCchPrintfW(wszStatus, ARRAYSIZE(wszStatus),
+                    T(L"\U0001F534 Getrennt  \u2013  %s", L"\U0001F534 Disconnected  \u2013  %s"),
+                    _rgProfiles[_nSelectedProfile]);
+            }
         }
         else
         {
-            StringCchPrintfW(wszStatus, ARRAYSIZE(wszStatus),
-                T(L"Status: %s  |  Kein Profil",
-                  L"Status: %s  |  No profile"),
-                T(_bConnected ? L"Verbunden" : L"Getrennt",
-                  _bConnected ? L"Connected" : L"Disconnected"));
-            LOG_WARN(L"Menu: no profiles available");
+            StringCchCopyW(wszStatus, ARRAYSIZE(wszStatus),
+                T(L"\u26A0  Kein Profil vorhanden", L"\u26A0  No profile configured"));
         }
         AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0, wszStatus);
     }
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
     // -----------------------------------------------------------------------
-    // Haupt-Aktion: Verbinden / Trennen direkt im Hauptmenü (fett / prominent)
-    // Dies ist die wichtigste Aktion – kein Submenu-Klick nötig.
+    // Haupt-Aktion: Verbinden / Trennen – mit Profilname damit klar ist was passiert
     // -----------------------------------------------------------------------
     if (_nProfiles > 0)
     {
         if (_bConnected)
         {
-            // Aktiver Tunnel kann direkt getrennt werden
-            AppendMenuW(hMenu, MF_STRING, IDM_DISCONNECT,
-                T(L"\u23F9  VPN trennen", L"\u23F9  Disconnect VPN"));
+            // Profilname im Label: Nutzer sieht WAS getrennt wird
+            WCHAR wszLabel[MAX_PATH_WGCP + 32] = {};
+            StringCchPrintfW(wszLabel, ARRAYSIZE(wszLabel),
+                T(L"\u23F9  VPN trennen  \u2013  %s", L"\u23F9  Disconnect VPN  \u2013  %s"),
+                _rgProfiles[_nSelectedProfile]);
+            AppendMenuW(hMenu, MF_STRING, IDM_DISCONNECT, wszLabel);
         }
         else
         {
-            // Verbinden mit dem aktuell ausgewählten Profil
-            WCHAR wszConnectLabel[MAX_PATH_WGCP + 32] = {};
-            StringCchPrintfW(wszConnectLabel, ARRAYSIZE(wszConnectLabel),
-                T(L"\u25B6  VPN verbinden  \u2013  %s",
-                  L"\u25B6  Connect VPN  \u2013  %s"),
+            WCHAR wszLabel[MAX_PATH_WGCP + 32] = {};
+            StringCchPrintfW(wszLabel, ARRAYSIZE(wszLabel),
+                T(L"\u25B6  VPN verbinden  \u2013  %s", L"\u25B6  Connect VPN  \u2013  %s"),
                 _rgProfiles[_nSelectedProfile]);
-            AppendMenuW(hMenu, MF_STRING, IDM_CONNECT, wszConnectLabel);
+            AppendMenuW(hMenu, MF_STRING, IDM_CONNECT, wszLabel);
         }
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     }
 
     // -----------------------------------------------------------------------
     // Profil-Liste
-    // Jedes Profil hat ein Submenu mit:
-    //   - "Verbinden" / "Trennen" (je nach Zustand)
-    //   - "Löschen" (ausgegraut wenn aktives oder verbundenes Profil)
     //
-    // Das aktiv ausgewählte Profil hat MF_CHECKED (Häkchen).
-    // Klick auf den Parent-Eintrag: Profil auswählen OHNE Verbinden.
+    // Jedes Profil ist ein MF_POPUP-Eintrag. Das Submenu zeigt kontextsensitiv:
+    //   Verbundenes Profil:    [Trennen | -- | Loeschen (grayed)]
+    //   Anderes Profil (frei): [Verbinden | Als Standard | -- | Loeschen]
+    //   Anderes Profil (busy): [Wechseln zu X | Als Standard | -- | Loeschen]
+    //
+    // Löschen ist nur gesperrt wenn dieses Profil GERADE VERBUNDEN ist.
+    // Ausgewähltes-aber-getrenntes Profil kann gelöscht werden.
+    //
+    // Parent-Eintrag: MF_CHECKED wenn ausgewählt, grüner Punkt wenn verbunden.
     // -----------------------------------------------------------------------
     for (int i = 0; i < _nProfiles; i++)
     {
-        bool bIsSelected  = (i == _nSelectedProfile);
-        bool bIsConnected = bIsSelected && _bConnected;
+        bool bIsSelected     = (i == _nSelectedProfile);
+        bool bIsConnected    = bIsSelected && _bConnected;
+        bool bOtherConnected = _bConnected && !bIsSelected;
 
         HMENU hSub = CreatePopupMenu();
-        if (!hSub)
-        {
-            LOG_WARN(L"Menu: CreatePopupMenu for profile submenu failed");
-            continue;
-        }
+        if (!hSub) { LOG_WARN(L"Menu: CreatePopupMenu for profile submenu failed"); continue; }
 
-        // Submenu-Eintrag 1: Verbinden / Trennen
+        // --- Submenu-Eintrag: Verbinden / Trennen / Wechseln ---
         if (bIsConnected)
         {
             AppendMenuW(hSub, MF_STRING, IDM_DISCONNECT,
                 T(L"\u23F9  Trennen", L"\u23F9  Disconnect"));
         }
-        else if (!_bConnected)
+        else if (bOtherConnected)
         {
-            // Nur wenn kein anderer Tunnel läuft darf verbunden werden
-            AppendMenuW(hSub, MF_STRING, IDM_CONNECT,
-                T(L"\u25B6  Verbinden", L"\u25B6  Connect"));
+            // Anderes Profil ist aktiv -> direkter Wechsel anbieten
+            WCHAR wszSwitch[MAX_PATH_WGCP + 32] = {};
+            StringCchPrintfW(wszSwitch, ARRAYSIZE(wszSwitch),
+                T(L"\u21C4  Wechseln zu %s", L"\u21C4  Switch to %s"),
+                _rgProfiles[i]);
+            AppendMenuW(hSub, MF_STRING,
+                static_cast<UINT_PTR>(IDM_PROFILE_SWITCH_BASE + i), wszSwitch);
         }
         else
         {
-            // Ein anderes Profil ist verbunden – erst trennen, dann kann dieses aktiv werden
-            AppendMenuW(hSub, MF_STRING | MF_GRAYED, 0,
-                T(L"\u25B6  Verbinden (erst anderes trennen)",
-                  L"\u25B6  Connect (disconnect other first)"));
+            // Nichts verbunden – direkt verbinden
+            AppendMenuW(hSub, MF_STRING,
+                static_cast<UINT_PTR>(IDM_PROFILE_CONNECT_BASE + i),
+                T(L"\u25B6  Verbinden", L"\u25B6  Connect"));
         }
 
-        // Submenu-Eintrag 2: Löschen
-        // Ausgegraut wenn: (a) dieses Profil aktiv verbunden ist ODER
-        //                  (b) dieses Profil das aktuell ausgewählte ist
-        // Begründung für (b): das ausgewählte Profil ist das "aktive" Profil
-        // des Nutzers – es würde beim nächsten Verbinden genutzt. Löschen
-        // ohne Auswahl eines anderen Profils zuerst führt zu Verwirrung.
+        // --- Submenu-Eintrag: Als Standard auswaehlen (nur wenn nicht bereits aktiv) ---
+        if (!bIsSelected)
+        {
+            AppendMenuW(hSub, MF_STRING,
+                static_cast<UINT_PTR>(IDM_PROFILE_SELECT_BASE + i),
+                T(L"\u2714  Als Standard ausw\u00E4hlen",
+                  L"\u2714  Set as default"));
+        }
+
+        AppendMenuW(hSub, MF_SEPARATOR, 0, nullptr);
+
+        // --- Submenu-Eintrag: Loeschen (nur gesperrt wenn gerade verbunden) ---
         UINT uDelFlags = MF_STRING;
-        if (bIsSelected)
-            uDelFlags |= MF_GRAYED;  // aktives Profil: erst anderes auswählen
+        if (bIsConnected) uDelFlags |= MF_GRAYED;  // erst trennen, dann loeschen
         AppendMenuW(hSub, uDelFlags,
             static_cast<UINT_PTR>(IDM_PROFILE_DELETE_BASE + i),
             T(L"\U0001F5D1  L\u00F6schen", L"\U0001F5D1  Delete"));
 
-        // Parent-Eintrag: Profilname mit Häkchen wenn ausgewählt.
-        // Klick auf den Parent-Eintrag = Profil auswählen (OHNE verbinden).
-        // Das Häkchen zeigt an welches Profil aktiv ausgewählt ist.
+        // --- Parent-Eintrag: Profilname ---
+        // Grüner Punkt wenn verbunden, Pfeil wenn ausgewählt (aber nicht verbunden), sonst Abstand
         WCHAR wszProfEntry[MAX_PATH_WGCP + 8] = {};
         if (bIsConnected)
-        {
-            // Verbundenes Profil bekommt grünen Punkt als Zusatzindikator
-            StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry),
-                L"\U0001F7E2 %s", _rgProfiles[i]);
-        }
+            StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry), L"\U0001F7E2 %s", _rgProfiles[i]);
+        else if (bIsSelected)
+            StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry), L"\u25B8  %s", _rgProfiles[i]);
         else
-        {
-            StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry),
-                L"    %s", _rgProfiles[i]);
-        }
+            StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry), L"    %s", _rgProfiles[i]);
 
         UINT uFlags = MF_POPUP;
         if (bIsSelected) uFlags |= MF_CHECKED;
 
-        // Klick auf Profil-Eintrag = Profil auswählen, IDM_PROFILE_BASE + i
-        // Dies ist ein MF_POPUP-Eintrag, der Klick öffnet das Submenu.
-        // Der Klick auf den Parent-Eintrag selbst wird NICHT als Kommando
-        // verarbeitet (Windows-Verhalten bei MF_POPUP).
-        // Daher ist "Aktivieren" im Submenu der Weg zum Auswählen UND
-        // der Parent-Eintrag zeigt nur den Zustand via Häkchen an.
-        AppendMenuW(hMenu, uFlags,
-            reinterpret_cast<UINT_PTR>(hSub), wszProfEntry);
+        AppendMenuW(hMenu, uFlags, reinterpret_cast<UINT_PTR>(hSub), wszProfEntry);
     }
 
-    // -----------------------------------------------------------------------
-    // YubiKey / Smartcard-Status (nur wenn aktiviert)
-    // -----------------------------------------------------------------------
     if (_nProfiles > 0 || _scConfig.bEnabled)
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
+    // -----------------------------------------------------------------------
+    // YubiKey / Smartcard-Status (nur wenn aktiviert)
+    // Seriennummer wird im SC-Watcher-Thread gecacht – kein blockierender
+    // ykman-Aufruf beim Menueöffnen mehr.
+    // -----------------------------------------------------------------------
     if (_scConfig.bEnabled)
     {
-        WCHAR wszYkLine[128] = {};
         WCHAR wszReader[256] = {};
         bool bYkPresent = WGCPFindSmartcard(_scConfig, wszReader, 256);
-        if (!bYkPresent) LOG_DEBUG(L"Menu: No YubiKey/smartcard detected in any reader");
 
+        WCHAR wszYkLine[128] = {};
         if (bYkPresent)
         {
-            // Serial via ykman info – mit PID-uniquer Temp-Datei (wie handshake fix)
-            WCHAR wszSerial[32] = {};
-            WCHAR wszTmp[MAX_PATH] = {};
-            GetTempPathW(MAX_PATH, wszTmp);
-            WCHAR wszTmpF[MAX_PATH] = {};
-            StringCchPrintfW(wszTmpF, MAX_PATH,
-                L"%swgcp_yk_%lu.txt", wszTmp, GetCurrentProcessId());
-
-            // ykman in separatem Thread wäre besser, aber da wir im Menü-Kontext
-            // sind und das Menü sowieso blockiert, ist ein kurzer sync-Aufruf OK.
-            // Timeout: 2 s – wenn ykman nicht antwortet, zeigen wir nur "verbunden"
-            WCHAR wszCmd[256] = {};
-            StringCchPrintfW(wszCmd, 256,
-                L"cmd.exe /C ykman info > \"%s\" 2>NUL", wszTmpF);
-            STARTUPINFOW si = { sizeof(si) };
-            PROCESS_INFORMATION pi = {};
-            if (CreateProcessW(nullptr, wszCmd, nullptr, nullptr, FALSE,
-                CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
-            {
-                WaitForSingleObject(pi.hProcess, 2000);
-                CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-                HANDLE hF = CreateFileW(wszTmpF, GENERIC_READ, FILE_SHARE_READ,
-                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-                if (hF != INVALID_HANDLE_VALUE)
-                {
-                    char buf[512] = {}; DWORD dw = 0;
-                    ReadFile(hF, buf, sizeof(buf) - 1, &dw, nullptr);
-                    CloseHandle(hF);
-                    DeleteFileW(wszTmpF);
-                    char* p = strstr(buf, "Serial number:");
-                    if (p)
-                    {
-                        p += 14; while (*p == ' ') p++;
-                        char szSer[16] = {}; int j = 0;
-                        while (*p && *p != '\r' && *p != '\n' && j < 15)
-                            szSer[j++] = *p++;
-                        MultiByteToWideChar(CP_ACP, 0, szSer, -1, wszSerial, 32);
-                    }
-                }
-            }
-            if (wszSerial[0])
+            if (_wszYkSerial[0])
                 StringCchPrintfW(wszYkLine, 128,
                     T(L"\U0001F511  YubiKey verbunden  (S/N %s)",
                       L"\U0001F511  YubiKey connected  (S/N %s)"),
-                    wszSerial);
+                    _wszYkSerial);
             else
                 StringCchCopyW(wszYkLine, 128,
                     T(L"\U0001F511  YubiKey verbunden",
@@ -594,36 +564,41 @@ void WireGuardTrayApp::_ShowContextMenu()
         }
         else
         {
+            // Karte nicht mehr da: Serial-Cache leeren
+            ZeroMemory(_wszYkSerial, sizeof(_wszYkSerial));
             StringCchCopyW(wszYkLine, 128,
                 T(L"\U0001F511  YubiKey nicht erkannt",
                   L"\U0001F511  YubiKey not detected"));
         }
         AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0, wszYkLine);
 
-        // YubiKey Manager öffnen (wenn installiert)
-        WCHAR wszYkMgr[MAX_PATH] = {};
-        const WCHAR* apwszPaths[] = {
-            L"%PROGRAMFILES%\\Yubico\\Yubico Authenticator\\authenticator.exe",
-            L"%PROGRAMFILES(X86)%\\Yubico\\Yubico Authenticator\\authenticator.exe",
-            L"%LOCALAPPDATA%\\Programs\\Yubico Authenticator\\authenticator.exe",
-            L"%PROGRAMFILES%\\Yubico\\YubiKey Manager\\ykman-gui.exe",
-            L"%PROGRAMFILES(X86)%\\Yubico\\YubiKey Manager\\ykman-gui.exe",
-            L"%LOCALAPPDATA%\\Programs\\yubikey-manager-qt\\ykman-gui.exe",
-        };
-        bool bYkMgrFound = false;
-        for (auto pwszTryPath : apwszPaths)
+        // YubiKey Manager / Authenticator oeffnen (gecachter Pfad oder einmalige Suche)
+        if (!_wszYkMgrPath[0])
         {
-            ExpandEnvironmentStringsW(pwszTryPath, wszYkMgr, MAX_PATH);
-            if (GetFileAttributesW(wszYkMgr) != INVALID_FILE_ATTRIBUTES)
-            { bYkMgrFound = true; break; }
+            const WCHAR* apwszPaths[] = {
+                L"%PROGRAMFILES%\\Yubico\\Yubico Authenticator\\authenticator.exe",
+                L"%PROGRAMFILES(X86)%\\Yubico\\Yubico Authenticator\\authenticator.exe",
+                L"%LOCALAPPDATA%\\Programs\\Yubico Authenticator\\authenticator.exe",
+                L"%PROGRAMFILES%\\Yubico\\YubiKey Manager\\ykman-gui.exe",
+                L"%PROGRAMFILES(X86)%\\Yubico\\YubiKey Manager\\ykman-gui.exe",
+                L"%LOCALAPPDATA%\\Programs\\yubikey-manager-qt\\ykman-gui.exe",
+            };
+            WCHAR wszTry[MAX_PATH] = {};
+            for (auto pwszP : apwszPaths)
+            {
+                ExpandEnvironmentStringsW(pwszP, wszTry, MAX_PATH);
+                if (GetFileAttributesW(wszTry) != INVALID_FILE_ATTRIBUTES)
+                {
+                    StringCchCopyW(_wszYkMgrPath, MAX_PATH, wszTry);
+                    break;
+                }
+            }
         }
-        if (bYkMgrFound)
-        {
-            StringCchCopyW(_wszYkMgrPath, MAX_PATH, wszYkMgr);
+        if (_wszYkMgrPath[0])
             AppendMenuW(hMenu, MF_STRING, IDM_OPEN_YKMANAGER,
                 T(L"   Yubico Authenticator \u00F6ffnen...",
                   L"   Open Yubico Authenticator..."));
-        }
+
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     }
 
@@ -633,13 +608,16 @@ void WireGuardTrayApp::_ShowContextMenu()
     AppendMenuW(hMenu, MF_STRING, IDM_IMPORT,
         T(L"\U0001F4C2  Profil importieren...",
           L"\U0001F4C2  Import profile..."));
+    AppendMenuW(hMenu, MF_STRING, IDM_OPEN_CONFIG_DIR,
+        T(L"\U0001F4C1  Konfigurationsordner \u00F6ffnen...",
+          L"\U0001F4C1  Open config folder..."));
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, IDM_EXIT,
         T(L"Beenden", L"Exit"));
 
     // -----------------------------------------------------------------------
-    // Menü anzeigen
+    // Menue anzeigen
     // -----------------------------------------------------------------------
     SetForegroundWindow(_hWnd);
     POINT pt = {};
@@ -674,7 +652,6 @@ void WireGuardTrayApp::_ShowContextMenu()
     PostMessageW(_hWnd, WM_NULL, 0, 0);
     DestroyMenu(hMenu);
 }
-
 // ---------------------------------------------------------------------------
 // _ShowBalloon – helper for tray balloon notifications
 // dwTimeout: display duration in ms (Windows caps at ~30 s; 0 = system default ~4 s)
@@ -724,6 +701,32 @@ void WireGuardTrayApp::_SelectProfile(int profileIndex)
           L"Profile \u201c%s\u201d selected.\nClick Connect VPN to activate."),
         _rgProfiles[_nSelectedProfile]);
     _ShowBalloon(L"WireGuard VPN", wszMsg, NIIF_INFO, 4000);
+}
+
+// ---------------------------------------------------------------------------
+// _SwitchProfile – aktiven Tunnel trennen, dann ein anderes Profil verbinden.
+// Wird aufgerufen wenn der Nutzer "Wechseln zu X" im Submenu wählt.
+// ---------------------------------------------------------------------------
+void WireGuardTrayApp::_SwitchProfile(int profileIndex)
+{
+    if (profileIndex < 0 || profileIndex >= _nProfiles) return;
+    if (profileIndex == _nSelectedProfile && _bConnected)
+    {
+        LOG_DEBUG(L"Tray: SwitchProfile - profile already connected, no change");
+        return;
+    }
+
+    WCHAR d[MAX_PATH_WGCP + 64] = {};
+    StringCchPrintfW(d, ARRAYSIZE(d),
+        L"Tray: SwitchProfile - disconnect '%s', connect '%s'",
+        _rgProfiles[_nSelectedProfile], _rgProfiles[profileIndex]);
+    LOG_DEBUG(d);
+
+    // 1. Aktuellen Tunnel trennen
+    _Disconnect();
+
+    // 2. Neues Profil verbinden
+    _Connect(profileIndex);
 }
 
 // ---------------------------------------------------------------------------
@@ -1175,6 +1178,7 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
         }
         if (uCmd == IDM_OPEN_YKMANAGER) { _OpenYubiKeyManager();       return 0; }
         if (uCmd == IDM_OPEN_CONFIG_DIR){ _OpenConfigDir();            return 0; }
+        if (uCmd == IDM_ABOUT)          { _ShowAboutDialog();           return 0; }
         if (uCmd == IDM_EXIT)
         {
             LOG_DEBUG(L"Tray: Exit");
@@ -1182,12 +1186,38 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
             PostQuitMessage(0);
             return 0;
         }
-        // Profil auswählen (OHNE verbinden) – nur Selektion ändern
-        if (uCmd >= IDM_PROFILE_BASE &&
-            uCmd < static_cast<UINT>(IDM_PROFILE_BASE + _nProfiles))
+        // Profil direkt verbinden aus Submenu (IDM_PROFILE_CONNECT_BASE + i).
+        if (uCmd >= IDM_PROFILE_CONNECT_BASE &&
+            uCmd < static_cast<UINT>(IDM_PROFILE_CONNECT_BASE + _nProfiles))
         {
-            int iSel = static_cast<int>(uCmd - IDM_PROFILE_BASE);
+            int iConn = static_cast<int>(uCmd - IDM_PROFILE_CONNECT_BASE);
+            WCHAR dbg[64] = {};
+            StringCchPrintfW(dbg, 64, L"Tray: connect profile[%d]", iConn);
+            LOG_DEBUG(dbg);
+            _Connect(iConn);
+            return 0;
+        }
+        // Profil als Standard setzen OHNE Verbinden (IDM_PROFILE_SELECT_BASE + i).
+        if (uCmd >= IDM_PROFILE_SELECT_BASE &&
+            uCmd < static_cast<UINT>(IDM_PROFILE_SELECT_BASE + _nProfiles))
+        {
+            int iSel = static_cast<int>(uCmd - IDM_PROFILE_SELECT_BASE);
+            WCHAR dbg[64] = {};
+            StringCchPrintfW(dbg, 64, L"Tray: select profile[%d] as default", iSel);
+            LOG_DEBUG(dbg);
             _SelectProfile(iSel);
+            return 0;
+        }
+        // Profil wechseln: aktiven Tunnel trennen, neues Profil verbinden
+        // (IDM_PROFILE_SWITCH_BASE + i).
+        if (uCmd >= IDM_PROFILE_SWITCH_BASE &&
+            uCmd < static_cast<UINT>(IDM_PROFILE_SWITCH_BASE + _nProfiles))
+        {
+            int iSwitch = static_cast<int>(uCmd - IDM_PROFILE_SWITCH_BASE);
+            WCHAR dbg[64] = {};
+            StringCchPrintfW(dbg, 64, L"Tray: switch to profile[%d]", iSwitch);
+            LOG_DEBUG(dbg);
+            _SwitchProfile(iSwitch);
             return 0;
         }
         break;
@@ -1836,6 +1866,54 @@ DWORD WINAPI WireGuardTrayApp::_SmartcardWatchThread(LPVOID lpParam)
             StringCchPrintfW(dIns, ARRAYSIZE(dIns), L"SC Watcher: Card inserted in reader '%s'", wszReader);
             LOG_DEBUG(dIns);
 
+            // Seriennummer via ykman ermitteln und cachen (laeuft im Hintergrund-
+            // Thread – kein UI-Freeze beim Menueöffnen).
+            // _wszYkSerial bleibt erhalten solange die Karte steckt.
+            if (pApp->_wszYkSerial[0] == L'\0')
+            {
+                WCHAR wszTmp[MAX_PATH] = {};
+                GetTempPathW(MAX_PATH, wszTmp);
+                WCHAR wszTmpF[MAX_PATH] = {};
+                StringCchPrintfW(wszTmpF, MAX_PATH,
+                    L"%swgcp_yk_%lu.txt", wszTmp, GetCurrentProcessId());
+
+                WCHAR wszCmd[256] = {};
+                StringCchPrintfW(wszCmd, 256,
+                    L"cmd.exe /C ykman info > \"%s\" 2>NUL", wszTmpF);
+                STARTUPINFOW si = { sizeof(si) };
+                PROCESS_INFORMATION pi = {};
+                if (CreateProcessW(nullptr, wszCmd, nullptr, nullptr, FALSE,
+                    CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+                {
+                    WaitForSingleObject(pi.hProcess, 3000);
+                    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+                    HANDLE hF = CreateFileW(wszTmpF, GENERIC_READ, FILE_SHARE_READ,
+                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    if (hF != INVALID_HANDLE_VALUE)
+                    {
+                        char buf[512] = {}; DWORD dw = 0;
+                        ReadFile(hF, buf, sizeof(buf) - 1, &dw, nullptr);
+                        CloseHandle(hF);
+                        DeleteFileW(wszTmpF);
+                        char* p = strstr(buf, "Serial number:");
+                        if (p)
+                        {
+                            p += 14; while (*p == ' ') p++;
+                            char szSer[16] = {}; int j = 0;
+                            while (*p && *p != '\r' && *p != '\n' && j < 15)
+                                szSer[j++] = *p++;
+                            MultiByteToWideChar(CP_ACP, 0, szSer, -1,
+                                pApp->_wszYkSerial, ARRAYSIZE(pApp->_wszYkSerial));
+                            WCHAR dSer[64] = {};
+                            StringCchPrintfW(dSer, 64, L"SC Watcher: YubiKey serial cached: %s",
+                                pApp->_wszYkSerial);
+                            LOG_DEBUG(dSer);
+                        }
+                    }
+                    else DeleteFileW(wszTmpF);
+                }
+            }
+
             if (pApp->_scConfig.bConnectOnInsert && !pApp->_bConnected
                 && pApp->_nProfiles > 0)
             {
@@ -1861,6 +1939,8 @@ DWORD WINAPI WireGuardTrayApp::_SmartcardWatchThread(LPVOID lpParam)
                 PostMessageW(pApp->_hWnd, WM_COMMAND,
                              MAKEWPARAM(IDM_DISCONNECT, 0), 0);
             }
+            // Serial-Cache leeren: naechste Karte koennte eine andere sein
+            ZeroMemory(pApp->_wszYkSerial, sizeof(pApp->_wszYkSerial));
             ZeroMemory(wszReader, sizeof(wszReader));
         }
 
@@ -2267,4 +2347,270 @@ void WireGuardTrayApp::_OpenYubiKeyManager()
             if (sei.hProcess) CloseHandle(sei.hProcess);
         }
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// _AboutDlgProc / _ShowAboutDialog
+// Modal "Informationen"-Dialog: Version, Copyright, GitHub-Link
+// ---------------------------------------------------------------------------
+
+// Control IDs
+#define IDC_ABOUT_LINK  601
+#define IDC_ABOUT_CLOSE 602
+
+// Helper: read DisplayVersion from Windows uninstall registry key
+static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
+{
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, WGCP_REG_UNINSTALL, 0,
+                      KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        DWORD cbData = (DWORD)(cchBuf * sizeof(WCHAR));
+        if (RegQueryValueExW(hKey, L"DisplayVersion", nullptr, nullptr,
+                             (LPBYTE)pwszBuf, &cbData) != ERROR_SUCCESS)
+        {
+            StringCchCopyW(pwszBuf, cchBuf, WGCP_VERSION_FALLBACK);
+        }
+        RegCloseKey(hKey);
+    }
+    else
+    {
+        StringCchCopyW(pwszBuf, cchBuf, WGCP_VERSION_FALLBACK);
+    }
+}
+
+INT_PTR CALLBACK WireGuardTrayApp::_AboutDlgProc(HWND hDlg, UINT uMsg,
+                                                   WPARAM wParam, LPARAM lParam)
+{
+    switch (uMsg)
+    {
+    case WM_INITDIALOG:
+    {
+        // Center dialog over parent
+        HWND hParent = GetParent(hDlg);
+        if (hParent)
+        {
+            RECT rcParent, rcDlg;
+            GetWindowRect(hParent, &rcParent);
+            GetWindowRect(hDlg,   &rcDlg);
+            int x = rcParent.left + (rcParent.right  - rcParent.left - (rcDlg.right  - rcDlg.left)) / 2;
+            int y = rcParent.top  + (rcParent.bottom - rcParent.top  - (rcDlg.bottom - rcDlg.top))  / 2;
+            SetWindowPos(hDlg, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        }
+        return TRUE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDC_ABOUT_CLOSE || LOWORD(wParam) == IDCANCEL)
+        {
+            EndDialog(hDlg, 0);
+            return TRUE;
+        }
+        if (LOWORD(wParam) == IDC_ABOUT_LINK)
+        {
+            ShellExecuteW(nullptr, L"open", WGCP_GITHUB_URL, nullptr, nullptr, SW_SHOWNORMAL);
+            return TRUE;
+        }
+        break;
+    case WM_CTLCOLORSTATIC:
+    {
+        // Make link button text blue
+        HWND hCtl = (HWND)lParam;
+        if (GetDlgCtrlID(hCtl) == IDC_ABOUT_LINK)
+        {
+            HDC hdc = (HDC)wParam;
+            SetTextColor(hdc, RGB(0, 102, 204));
+            SetBkMode(hdc, TRANSPARENT);
+            return (INT_PTR)GetStockObject(NULL_BRUSH);
+        }
+        break;
+    }
+    }
+    return FALSE;
+}
+
+void WireGuardTrayApp::_ShowAboutDialog()
+{
+    // -----------------------------------------------------------------------
+    // Programmatic dialog: 340 x 200 DLU, Segoe UI 9pt
+    // Layout: icon + title (header), version, copyright, description, link, close
+    // -----------------------------------------------------------------------
+    const int DLG_W  = 340;
+    const int DLG_H  = 210;
+    const int MARGIN = 12;
+    const int BTN_W  = 100;
+    const int BTN_H  = 26;
+    const int LBL_H  = 20;
+
+    // Allocate dialog template buffer
+    BYTE buf[4096] = {};
+    DLGTEMPLATE* pDlg = (DLGTEMPLATE*)buf;
+    pDlg->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_SETFONT | DS_CENTER;
+    pDlg->dwExtendedStyle = 0;
+    pDlg->cdit = 0;   // no controls in template — we add them in WM_INITDIALOG via CreateWindow
+    pDlg->x  = 0; pDlg->y  = 0;
+    pDlg->cx = DLG_W; pDlg->cy = DLG_H;
+
+    // After DLGTEMPLATE: menu (none), class (none), title, then font
+    WORD* pw = (WORD*)(pDlg + 1);
+    *pw++ = 0; // no menu
+    *pw++ = 0; // default class
+    // Title string (L"Informationen")
+    const WCHAR* pTitle = L"Informationen";
+    for (const WCHAR* p = pTitle; *p; ++p) *pw++ = (WORD)*p;
+    *pw++ = 0;
+    // Font: size 9, face "Segoe UI"
+    *pw++ = 9;
+    const WCHAR* pFont = L"Segoe UI";
+    for (const WCHAR* p = pFont; *p; ++p) *pw++ = (WORD)*p;
+    *pw++ = 0;
+
+    // DialogBoxIndirectParamW shows the dialog; we build controls in WM_INITDIALOG
+    // Instead use a callback that creates all child windows manually
+    struct AboutCtx
+    {
+        HWND    hWnd;       // tray window (owner)
+        WCHAR   wszVersion[64];
+    };
+    AboutCtx ctx = {};
+    ctx.hWnd = _hWnd;
+    _GetDisplayVersion(ctx.wszVersion, ARRAYSIZE(ctx.wszVersion));
+
+    // Use a lambda-compatible trampoline via thread-local pointer
+    // (simplest: use DialogBoxIndirectParam with a static helper that reads lParam)
+    struct Trampoline
+    {
+        static INT_PTR CALLBACK Proc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+        {
+            if (uMsg == WM_INITDIALOG)
+            {
+                AboutCtx* pCtx = (AboutCtx*)lParam;
+                SetWindowLongPtrW(hDlg, GWLP_USERDATA, (LONG_PTR)pCtx);
+
+                // ---------------------------------------------------------------
+                // Build controls
+                // ---------------------------------------------------------------
+                HFONT hFontBig   = CreateFontW(-20, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                               CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                HFONT hFontNorm  = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                               CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                HFONT hFontLink  = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, TRUE, FALSE,
+                                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                               CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                // Store fonts for cleanup (attach to dialog via prop)
+                SetPropW(hDlg, L"FontBig",  hFontBig);
+                SetPropW(hDlg, L"FontNorm", hFontNorm);
+                SetPropW(hDlg, L"FontLink", hFontLink);
+
+                int M = 16, y = 16, W = 308;
+
+                // Title: "WireGuard Credential Provider"
+                HWND hTitle = CreateWindowW(L"STATIC", L"\U0001F512 WireGuard Credential Provider",
+                    WS_CHILD | WS_VISIBLE | SS_LEFT, M, y, W, 28, hDlg, nullptr, nullptr, nullptr);
+                SendMessageW(hTitle, WM_SETFONT, (WPARAM)hFontBig, TRUE);
+                y += 34;
+
+                // Version
+                WCHAR wszVer[128];
+                StringCchPrintfW(wszVer, ARRAYSIZE(wszVer), L"Version %s", pCtx->wszVersion);
+                HWND hVer = CreateWindowW(L"STATIC", wszVer,
+                    WS_CHILD | WS_VISIBLE | SS_LEFT, M, y, W, 20, hDlg, nullptr, nullptr, nullptr);
+                SendMessageW(hVer, WM_SETFONT, (WPARAM)hFontNorm, TRUE);
+                y += 22;
+
+                // Copyright
+                HWND hCopy = CreateWindowW(L"STATIC", L"\u00A9 Jens Kaesler",
+                    WS_CHILD | WS_VISIBLE | SS_LEFT, M, y, W, 20, hDlg, nullptr, nullptr, nullptr);
+                SendMessageW(hCopy, WM_SETFONT, (WPARAM)hFontNorm, TRUE);
+                y += 22;
+
+                // Description
+                HWND hDesc = CreateWindowW(L"STATIC",
+                    L"WireGuard-Anmeldeanbieter f\u00FCr Windows-Dom\u00E4nen mit YubiKey-Unterst\u00FCtzung.",
+                    WS_CHILD | WS_VISIBLE | SS_LEFT, M, y, W, 20, hDlg, nullptr, nullptr, nullptr);
+                SendMessageW(hDesc, WM_SETFONT, (WPARAM)hFontNorm, TRUE);
+                y += 32;
+
+                // GitHub link (button styled as link)
+                HWND hLink = CreateWindowW(L"BUTTON", L"GitHub: jenskaesler/wireguard_credential_provider",
+                    WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                    M, y, W, 22, hDlg, (HMENU)(INT_PTR)IDC_ABOUT_LINK, nullptr, nullptr);
+                SendMessageW(hLink, WM_SETFONT, (WPARAM)hFontLink, TRUE);
+                y += 36;
+
+                // Close button (centered)
+                int btnX = (340 - 90) / 2;
+                HWND hClose = CreateWindowW(L"BUTTON",
+                    T(L"Schlie\u00DFen", L"Close"),
+                    WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                    btnX, y, 90, 26, hDlg, (HMENU)(INT_PTR)IDC_ABOUT_CLOSE, nullptr, nullptr);
+                SendMessageW(hClose, WM_SETFONT, (WPARAM)hFontNorm, TRUE);
+
+                // Center dialog on screen / parent
+                RECT rcDlg; GetWindowRect(hDlg, &rcDlg);
+                int sw = GetSystemMetrics(SM_CXSCREEN);
+                int sh = GetSystemMetrics(SM_CYSCREEN);
+                int dw = rcDlg.right - rcDlg.left;
+                int dh = rcDlg.bottom - rcDlg.top;
+                SetWindowPos(hDlg, HWND_TOP, (sw-dw)/2, (sh-dh)/2, 0, 0, SWP_NOSIZE);
+
+                return TRUE;
+            }
+
+            if (uMsg == WM_DRAWITEM)
+            {
+                // Owner-draw the GitHub link button
+                LPDRAWITEMSTRUCT pDI = (LPDRAWITEMSTRUCT)lParam;
+                if (pDI->CtlID == IDC_ABOUT_LINK)
+                {
+                    HFONT hFontLink = (HFONT)GetPropW(hDlg, L"FontLink");
+                    HFONT hOld = (HFONT)SelectObject(pDI->hDC, hFontLink);
+                    SetTextColor(pDI->hDC, RGB(0, 102, 204));
+                    SetBkMode(pDI->hDC, TRANSPARENT);
+                    FillRect(pDI->hDC, &pDI->rcItem, (HBRUSH)GetStockObject(WHITE_BRUSH));
+                    DrawTextW(pDI->hDC, L"GitHub: jenskaesler/wireguard_credential_provider", -1,
+                              &pDI->rcItem, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(pDI->hDC, hOld);
+
+                    // Underline
+                    RECT rcLine = pDI->rcItem;
+                    rcLine.top = rcLine.bottom - 2;
+                    HBRUSH hBr = CreateSolidBrush(RGB(0, 102, 204));
+                    FillRect(pDI->hDC, &rcLine, hBr);
+                    DeleteObject(hBr);
+                    return TRUE;
+                }
+            }
+
+            if (uMsg == WM_COMMAND)
+            {
+                WORD wID = LOWORD(wParam);
+                if (wID == IDC_ABOUT_CLOSE || wID == IDCANCEL)
+                {
+                    EndDialog(hDlg, 0);
+                    return TRUE;
+                }
+                if (wID == IDC_ABOUT_LINK)
+                {
+                    ShellExecuteW(nullptr, L"open", WGCP_GITHUB_URL, nullptr, nullptr, SW_SHOWNORMAL);
+                    return TRUE;
+                }
+            }
+
+            if (uMsg == WM_DESTROY)
+            {
+                // Clean up fonts
+                HFONT h;
+                if ((h = (HFONT)GetPropW(hDlg, L"FontBig")))  { RemovePropW(hDlg, L"FontBig");  DeleteObject(h); }
+                if ((h = (HFONT)GetPropW(hDlg, L"FontNorm"))) { RemovePropW(hDlg, L"FontNorm"); DeleteObject(h); }
+                if ((h = (HFONT)GetPropW(hDlg, L"FontLink"))) { RemovePropW(hDlg, L"FontLink"); DeleteObject(h); }
+            }
+
+            return FALSE;
+        }
+    };
+
+    DialogBoxIndirectParamW(_hInst, pDlg, _hWnd, Trampoline::Proc, (LPARAM)&ctx);
 }

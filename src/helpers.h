@@ -65,6 +65,9 @@
 // Registry key and values
 // ---------------------------------------------------------------------------
 #define WGCP_REG_KEY          L"SOFTWARE\\Jens Kaesler\\WireGuard Credential Provider"
+#define WGCP_REG_UNINSTALL    L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\WireGuard Credential Provider"
+#define WGCP_GITHUB_URL       L"https://github.com/jenskaesler/wireguard_credential_provider"
+#define WGCP_VERSION_FALLBACK L"(unbekannt)"
 #define WGCP_REG_EXEPATH      L"ExePath"
 #define WGCP_REG_WGEXEPATH              L"WgExePath"
 #define WGCP_REG_HANDSHAKE_TIMEOUT_SEC  L"HandshakeTimeoutSec"

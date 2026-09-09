@@ -65,14 +65,21 @@
 #define IDM_CONNECT             200
 #define IDM_DISCONNECT          201
 #define IDM_CONNECT_TOGGLE      202  // Linksklick: verbinden wenn getrennt, trennen wenn verbunden
-// 300..363: select profile i without connecting (IDM_PROFILE_BASE + i)
-// 500..563: delete profile i  (IDM_PROFILE_DELETE_BASE + i)
-#define IDM_PROFILE_BASE        300
-#define IDM_PROFILE_DELETE_BASE 500
+// 300..363: (legacy, unused – MF_POPUP sends no WM_COMMAND for parent entries)
+// 500..563: delete profile i            (IDM_PROFILE_DELETE_BASE + i)
+// 600..663: connect profile i           (IDM_PROFILE_CONNECT_BASE + i)
+// 700..763: select profile i as default (IDM_PROFILE_SELECT_BASE + i)
+// 800..863: switch: disconnect + connect profile i (IDM_PROFILE_SWITCH_BASE + i)
+#define IDM_PROFILE_BASE         300
+#define IDM_PROFILE_DELETE_BASE  500
+#define IDM_PROFILE_CONNECT_BASE 600
+#define IDM_PROFILE_SELECT_BASE  700
+#define IDM_PROFILE_SWITCH_BASE  800
 #define IDM_IMPORT          401
 #define IDM_OPEN_CONFIG_DIR 402
 #define IDM_DELETE_PROFILE  403
 #define IDM_OPEN_YKMANAGER  404
+#define IDM_ABOUT           406
 #define IDM_EXIT            400
 
 #define WGCP_TRAY_CLASS     L"WireGuardCPTrayClass"
@@ -115,6 +122,7 @@ private:
 
     WCHAR               _wszPin[64];
     WCHAR               _wszScStatusMsg[MAX_LABEL_WGCP];
+    WCHAR               _wszYkSerial[32];    // Gecachte YubiKey-Seriennummer (async befüllt)
 
     static LRESULT CALLBACK _WndProc(HWND, UINT, WPARAM, LPARAM);
     static INT_PTR CALLBACK _PinDlgProc(HWND, UINT, WPARAM, LPARAM);
@@ -126,7 +134,8 @@ private:
     void _UpdateTrayIcon();
     void _ShowContextMenu();
     void _Connect(int profileIndex);
-    void _SelectProfile(int profileIndex);  // Profil aktiv setzen OHNE Verbinden
+    void _SelectProfile(int profileIndex);   // Profil aktiv setzen OHNE Verbinden
+    void _SwitchProfile(int profileIndex);   // Trennen + anderes Profil verbinden
     void _Disconnect();
     bool _DoSmartcardAuth();
     bool _ShowPinDialog();
@@ -140,6 +149,8 @@ private:
     void _OpenYubiKeyManager();
     WCHAR _wszYkMgrPath[MAX_PATH];  // path found during menu build
     void _OpenConfigDir();
+    void _ShowAboutDialog();
+    static INT_PTR CALLBACK _AboutDlgProc(HWND, UINT, WPARAM, LPARAM);
     void _CheckAndRemoveWireGuardShortcut();
 
     // WireGuard UI Watcher

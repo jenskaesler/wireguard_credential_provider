@@ -7,6 +7,50 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.8.5] – 2026-09-09
+
+### Added
+
+- **Systray: About-Dialog** (`ℹ️ Informationen...` im Kontextmenü)
+  - Neue Menüoption vor „Beenden" öffnet einen modalen Dialog mit App-Name, Version
+    (aus dem Windows-Uninstall-Registry-Key `DisplayVersion`), Copyright-Vermerk und
+    Kurzbeschreibung
+  - **GitHub-Link** als owner-drawn Button (blau, unterstrichen) öffnet
+    `https://github.com/jenskaesler/wireguard_credential_provider` direkt im Browser
+  - Neue Konstanten in `helpers.h`: `WGCP_REG_UNINSTALL`, `WGCP_GITHUB_URL`,
+    `WGCP_VERSION_FALLBACK`
+  - Implementierung analog zum bestehenden PIN-Dialog (programmatischer Win32-Dialog,
+    keine `.rc`-Template-Abhängigkeit)
+
+- **Systray: Profilwechsel in einem Schritt** (`⇄ Wechseln zu <Profil>`)
+  - Neue Methode `_SwitchProfile(int profileIndex)` — trennt das aktive Profil und
+    verbindet das gewählte in einer Aktion
+  - Erscheint im Profil-Untermenü wenn ein anderes Profil bereits verbunden ist
+  - Neue Menü-ID-Range `IDM_PROFILE_SWITCH_BASE 800`
+
+- **Systray: YubiKey-Serial asynchron gecacht**
+  - Seriennummer wird im `_SmartcardWatchThread` beim Einstecken der Karte via `ykman`
+    ermittelt und in `_wszYkSerial` gespeichert
+  - Menüaufbau blockiert nicht mehr (kein synchrones `WaitForSingleObject` beim Öffnen
+    des Kontextmenüs)
+
+- **Systray: Konfigurationsordner öffnen** — fehlender Menüeintrag nachgetragen
+  (`📁 Konfigurationsordner öffnen...`); `_OpenConfigDir()` und `IDM_OPEN_CONFIG_DIR`
+  waren bereits implementiert, aber nie ins Menü aufgenommen
+
+### Fixed
+
+- **Systray: Profilwechsel wurde ignoriert** — `MF_POPUP`-Eltern-Einträge senden kein
+  `WM_COMMAND`; der bisherige `IDM_PROFILE_BASE+i`-Handler war toter Code. Jede
+  „Verbinden"-Option im Untermenü erhält jetzt eine eindeutige ID aus dem Bereich
+  `IDM_PROFILE_CONNECT_BASE+i`
+
+- **Systray: Löschen war zu restriktiv** — „Löschen" wurde auch für
+  ausgewählte-aber-nicht-verbundene Profile grau dargestellt. Neu: nur ausgegraut wenn
+  das Profil aktiv verbunden ist
+
+---
+
 ## [2026.8.4] – 2026-08-10
 
 ### Added
