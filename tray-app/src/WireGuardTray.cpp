@@ -73,6 +73,7 @@ WireGuardTrayApp::~WireGuardTrayApp()
     _StopWireGuardWatcher();
     _StopSmartcardWatcher();
     _StopNetworkWatcher();
+    _StopUpdateCheckThread();
     _RemoveTrayIcon();
     if (_hIconConnected)    { DestroyIcon(_hIconConnected);    _hIconConnected    = nullptr; }
     if (_hIconDisconnected) { DestroyIcon(_hIconDisconnected); _hIconDisconnected = nullptr; }
@@ -141,6 +142,7 @@ bool WireGuardTrayApp::Init(HINSTANCE hInst)
         (_scConfig.bConnectOnInsert || _scConfig.bDisconnectOnRemove))
         _StartSmartcardWatcher();
     _StartNetworkWatcher();
+    if (_bAutoUpdateCheck) _StartUpdateCheckThread();
     LOG_DEBUG(L"Tray: Init complete");
     return true;
 }
@@ -170,6 +172,7 @@ void WireGuardTrayApp::_LoadConfig()
         ReadRegString(hKey, WGCP_REG_EXEPATH,   _wszExePath,   MAX_PATH_WGCP, WGCP_DEFAULT_EXEPATH);
         ReadRegString(hKey, WGCP_REG_WGEXEPATH, _wszWgExePath, MAX_PATH_WGCP, WGCP_DEFAULT_WGEXEPATH);
         _dwHandshakeTimeoutSec = ReadRegDword(hKey, WGCP_REG_HANDSHAKE_TIMEOUT_SEC, 0);
+        _bAutoUpdateCheck = (ReadRegDword(hKey, L"AutoUpdateCheck", 1) != 0); // default: an
         RegCloseKey(hKey);
         LOG_DEBUG(L"Tray: Config loaded from registry");
     }
@@ -566,6 +569,11 @@ void WireGuardTrayApp::_ShowContextMenu()
         {
             // Karte nicht mehr da: Serial-Cache leeren
             ZeroMemory(_wszYkSerial, sizeof(_wszYkSerial));
+    _bAutoUpdateCheck   = false;
+    _bUpdateBalloonActive = false;
+    ZeroMemory(_wszUpdateUrl, sizeof(_wszUpdateUrl));
+    _hUpdateThread = nullptr;
+    _hUpdateStop   = nullptr;
             StringCchCopyW(wszYkLine, 128,
                 T(L"\U0001F511  YubiKey nicht erkannt",
                   L"\U0001F511  YubiKey not detected"));
@@ -612,6 +620,9 @@ void WireGuardTrayApp::_ShowContextMenu()
         T(L"\U0001F4C1  Konfigurationsordner \u00F6ffnen...",
           L"\U0001F4C1  Open config folder..."));
 
+    AppendMenuW(hMenu, (_bAutoUpdateCheck ? MF_CHECKED : MF_UNCHECKED) | MF_STRING,
+        IDM_UPDATE_CHECK,
+        T(L"\U0001F504 Auf Updates pr\u00FCfen", L"\U0001F504 Check for updates"));
     AppendMenuW(hMenu, MF_STRING, IDM_ABOUT,
         T(L"\u2139 Informationen...", L"\u2139 About..."));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
@@ -1126,6 +1137,14 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
             _ShowContextMenu();
             break;
 
+        case NIN_BALLOONUSERCLICK:
+            if (_bUpdateBalloonActive && _wszUpdateUrl[0])
+            {
+                ShellExecuteW(nullptr, L"open", _wszUpdateUrl, nullptr, nullptr, SW_SHOWNORMAL);
+                _bUpdateBalloonActive = false;
+            }
+            break;
+
         case WM_LBUTTONDBLCLK:
             // Doppelklick: Verbinden / Trennen (Toggle)
             // WM_LBUTTONUP wird von Windows VOR WM_LBUTTONDBLCLK gesendet.
@@ -1181,6 +1200,23 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
         if (uCmd == IDM_OPEN_YKMANAGER) { _OpenYubiKeyManager();       return 0; }
         if (uCmd == IDM_OPEN_CONFIG_DIR){ _OpenConfigDir();            return 0; }
         if (uCmd == IDM_ABOUT)          { _ShowAboutDialog();           return 0; }
+        if (uCmd == IDM_UPDATE_CHECK)
+        {
+            _bAutoUpdateCheck = !_bAutoUpdateCheck;
+            // In Registry schreiben
+            HKEY hKey = nullptr;
+            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, WGCP_REG_KEY, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS)
+            {
+                DWORD dw = _bAutoUpdateCheck ? 1 : 0;
+                RegSetValueExW(hKey, L"AutoUpdateCheck", 0, REG_DWORD, (BYTE*)&dw, sizeof(dw));
+                RegCloseKey(hKey);
+            }
+            if (_bAutoUpdateCheck)
+                _StartUpdateCheckThread();
+            else
+                _StopUpdateCheckThread();
+            return 0;
+        }
         if (uCmd == IDM_EXIT)
         {
             LOG_DEBUG(L"Tray: Exit");
@@ -2635,4 +2671,222 @@ void WireGuardTrayApp::_ShowAboutDialog()
                             _hWnd,
                             _AboutDlgProc,
                             reinterpret_cast<LPARAM>(&data));
+}
+
+// ---------------------------------------------------------------------------
+// Update-Prüfung: _StartUpdateCheckThread / _StopUpdateCheckThread / _UpdateCheckThread
+//
+// Ablauf:
+//  1. Wartet 10 Minuten (oder bis _hUpdateStop signalisiert wird)
+//  2. Ruft GitHub-API ab:
+//     GET https://api.github.com/repos/jenskaesler/wireguard_credential_provider/releases/latest
+//  3. Extrahiert "tag_name" aus der JSON-Antwort
+//  4. Vergleicht mit installierter Version (aus WGCP_REG_UNINSTALL\DisplayVersion)
+//  5. Wenn neuer: Balloon-Tip mit Link zur Release-Seite
+// ---------------------------------------------------------------------------
+
+void WireGuardTrayApp::_StartUpdateCheckThread()
+{
+    if (_hUpdateThread) return;  // läuft bereits
+    _hUpdateStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!_hUpdateStop) return;
+    _hUpdateThread = CreateThread(nullptr, 0, _UpdateCheckThread, this, 0, nullptr);
+    if (!_hUpdateThread) { CloseHandle(_hUpdateStop); _hUpdateStop = nullptr; }
+    else LOG_DEBUG(L"UpdateCheck: thread started");
+}
+
+void WireGuardTrayApp::_StopUpdateCheckThread()
+{
+    if (_hUpdateStop)  SetEvent(_hUpdateStop);
+    if (_hUpdateThread)
+    {
+        WaitForSingleObject(_hUpdateThread, 5000);
+        CloseHandle(_hUpdateThread);
+        _hUpdateThread = nullptr;
+    }
+    if (_hUpdateStop)  { CloseHandle(_hUpdateStop); _hUpdateStop = nullptr; }
+}
+
+// Hilfsfunktion: JSON-String-Wert extrahieren ("key":"value")
+static bool ExtractJsonString(const char* pszJson, const char* pszKey,
+                               char* pszOut, int cchOut)
+{
+    // Suche "key":"
+    const char* p = strstr(pszJson, pszKey);
+    if (!p) return false;
+    p += strlen(pszKey);
+    // Überspringe optionale Leerzeichen und ':'
+    while (*p == ' ' || *p == ':') p++;
+    if (*p != '"') return false;
+    p++;  // öffnendes "
+    int i = 0;
+    while (*p && *p != '"' && i < cchOut - 1)
+        pszOut[i++] = *p++;
+    pszOut[i] = '\0';
+    return i > 0;
+}
+
+// Versionsnummer-Vergleich: "2026.8.5" > "2026.8.4" → true
+// Format: YYYY.M.R (keine führenden Nullen, kein 'v'-Präfix)
+static bool IsNewerVersion(const char* pszLatest, const char* pszInstalled)
+{
+    // 'v'-Präfix tolerieren (GitHub tag_name ist oft "v2026.8.5")
+    if (pszLatest[0] == 'v') pszLatest++;
+    int la=0, lb=0, lc=0;
+    int ia=0, ib=0, ic=0;
+    if (sscanf_s(pszLatest,   "%d.%d.%d", &la, &lb, &lc) < 2) return false;
+    if (sscanf_s(pszInstalled, "%d.%d.%d", &ia, &ib, &ic) < 2) return false;
+    if (la != ia) return la > ia;
+    if (lb != ib) return lb > ib;
+    return lc > ic;
+}
+
+DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
+{
+    WireGuardTrayApp* pApp = static_cast<WireGuardTrayApp*>(lpParam);
+
+    // 10 Minuten warten (in 1-Sekunden-Schritten für schnellen Stop)
+    const DWORD WAIT_TOTAL_MS = 10 * 60 * 1000;
+    DWORD dwWaited = 0;
+    while (dwWaited < WAIT_TOTAL_MS)
+    {
+        if (WaitForSingleObject(pApp->_hUpdateStop, 1000) != WAIT_TIMEOUT) return 0;
+        dwWaited += 1000;
+    }
+
+    LOG_DEBUG(L"UpdateCheck: checking GitHub for latest release...");
+
+    // --- Installierte Version lesen ---
+    char szInstalled[64] = "(unknown)";
+    {
+        WCHAR wszVer[64] = {};
+        _GetDisplayVersion(wszVer, ARRAYSIZE(wszVer));
+        WideCharToMultiByte(CP_ACP, 0, wszVer, -1, szInstalled, ARRAYSIZE(szInstalled), nullptr, nullptr);
+    }
+
+    // --- WinHTTP: GET api.github.com ---
+    HINTERNET hSession = WinHttpOpen(
+        L"WireGuardCP-UpdateCheck/1.0",
+        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) { LOG_WARN(L"UpdateCheck: WinHttpOpen failed"); return 0; }
+
+    HINTERNET hConnect = WinHttpConnect(hSession,
+        L"api.github.com",
+        INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); LOG_WARN(L"UpdateCheck: WinHttpConnect failed"); return 0; }
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect,
+        L"GET",
+        L"/repos/jenskaesler/wireguard_credential_provider/releases/latest",
+        nullptr,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        WINHTTP_FLAG_SECURE);
+    if (!hRequest)
+    {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        LOG_WARN(L"UpdateCheck: WinHttpOpenRequest failed");
+        return 0;
+    }
+
+    // User-Agent und Accept-Header setzen
+    WinHttpAddRequestHeaders(hRequest,
+        L"Accept: application/vnd.github+json\r\nX-GitHub-Api-Version: 2022-11-28",
+        (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
+
+    BOOL bSent = WinHttpSendRequest(hRequest,
+        WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+        WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    if (!bSent || !WinHttpReceiveResponse(hRequest, nullptr))
+    {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        LOG_WARN(L"UpdateCheck: HTTP request failed");
+        return 0;
+    }
+
+    // HTTP-Status prüfen
+    DWORD dwStatus = 0;
+    DWORD cbStatus = sizeof(dwStatus);
+    WinHttpQueryHeaders(hRequest,
+        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_HEADER_NAME_BY_INDEX, &dwStatus, &cbStatus, WINHTTP_NO_HEADER_INDEX);
+    if (dwStatus != 200)
+    {
+        WCHAR wszWarn[64];
+        StringCchPrintfW(wszWarn, ARRAYSIZE(wszWarn),
+            L"UpdateCheck: HTTP status %lu", dwStatus);
+        LOG_WARN(wszWarn);
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return 0;
+    }
+
+    // Response-Body lesen (max. 64 KB)
+    char szBody[65536] = {};
+    DWORD dwRead = 0, dwOffset = 0;
+    while (dwOffset < sizeof(szBody) - 1)
+    {
+        DWORD dwAvail = 0;
+        if (!WinHttpQueryDataAvailable(hRequest, &dwAvail) || dwAvail == 0) break;
+        DWORD dwToRead = dwAvail < (DWORD)(sizeof(szBody) - 1 - dwOffset) ? dwAvail : (DWORD)(sizeof(szBody) - 1 - dwOffset);
+        if (!WinHttpReadData(hRequest, szBody + dwOffset, dwToRead, &dwRead) || dwRead == 0) break;
+        dwOffset += dwRead;
+    }
+    szBody[dwOffset] = '\0';
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+
+    // --- tag_name extrahieren ---
+    char szTagName[64] = {};
+    if (!ExtractJsonString(szBody, "\"tag_name\"", szTagName, ARRAYSIZE(szTagName)))
+    {
+        LOG_WARN(L"UpdateCheck: could not parse tag_name from response");
+        return 0;
+    }
+
+    WCHAR wszDbg[128];
+    StringCchPrintfW(wszDbg, ARRAYSIZE(wszDbg),
+        L"UpdateCheck: latest=%hs  installed=%hs", szTagName, szInstalled);
+    LOG_DEBUG(wszDbg);
+
+    // --- Versionsvergleich ---
+    if (!IsNewerVersion(szTagName, szInstalled))
+    {
+        LOG_DEBUG(L"UpdateCheck: already up to date");
+        return 0;
+    }
+
+    // --- Release-URL bauen: "v"-Präfix tolerieren ---
+    const char* pszTag = (szTagName[0] == 'v') ? szTagName + 1 : szTagName;
+    char szUrl[256] = {};
+    sprintf_s(szUrl, ARRAYSIZE(szUrl),
+        "https://github.com/jenskaesler/wireguard_credential_provider/releases/tag/%s",
+        (szTagName[0] == 'v') ? szTagName : szTagName);
+    MultiByteToWideChar(CP_ACP, 0, szUrl, -1,
+        pApp->_wszUpdateUrl, ARRAYSIZE(pApp->_wszUpdateUrl));
+
+    // --- Balloon-Tip anzeigen ---
+    WCHAR wszTitle[128], wszMsg[256];
+    const char* pszDisplay = (szTagName[0] == 'v') ? szTagName + 1 : szTagName;
+    StringCchPrintfW(wszTitle, ARRAYSIZE(wszTitle),
+        T(L"\U0001F504 Update verf\u00FCgbar: %hs",
+          L"\U0001F504 Update available: %hs"),
+        pszDisplay);
+    StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+        T(L"Version %hs ist verf\u00FCgbar. Hier klicken zum Download.",
+          L"Version %hs is available. Click here to download."),
+        pszDisplay);
+
+    pApp->_bUpdateBalloonActive = true;
+    pApp->_ShowBalloon(wszTitle, wszMsg, NIIF_INFO, 15000);
+
+    LOG_DEBUG(L"UpdateCheck: balloon shown");
+    return 0;
 }

@@ -7,6 +7,28 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.8.6] – 2026-09-09
+
+### Added
+
+- **Systray: Automatische Update-Prüfung** (`🔄 Auf Updates prüfen` im Kontextmenü)
+  - Neuer umschaltbarer Menüeintrag mit Haken — aktiviert/deaktiviert die automatische
+    Prüfung auf neue GitHub-Releases
+  - Status wird in `HKLM\SOFTWARE\Jens Kaesler\WireGuard Credential Provider\AutoUpdateCheck`
+    (DWORD) gespeichert — kann von Administratoren per Registry oder GPO gesteuert werden
+    (Standard: 1 = aktiviert)
+  - 10 Minuten nach dem Tray-Start wird
+    `api.github.com/repos/jenskaesler/wireguard_credential_provider/releases/latest`
+    per WinHTTP (HTTPS) abgefragt
+  - Ist eine neuere Version verfügbar, erscheint ein Balloon-Tip:
+    *„🔄 Update verfügbar: x.x.x — Hier klicken zum Download"*
+  - Klick auf den Balloon öffnet direkt die GitHub-Release-Seite im Browser
+  - Version wird mit installierter Version aus dem Windows-Uninstall-Key verglichen
+    (`DisplayVersion`); `v`-Präfix im GitHub-Tag-Namen wird toleriert
+  - Thread stoppt sofort wenn die Einstellung deaktiviert wird oder die App beendet wird
+
+---
+
 ## [2026.8.5] – 2026-09-09
 
 ### Added

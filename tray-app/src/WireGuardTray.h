@@ -41,6 +41,8 @@
 #include <wincrypt.h>
 #include <new>          // std::nothrow
 #include <tlhelp32.h>   // CreateToolhelp32Snapshot, PROCESSENTRY32W
+#include <winhttp.h>
+#pragma comment(lib, "winhttp.lib")
 
 // ---------------------------------------------------------------------------
 // Pull in all shared helpers from the CP DLL.
@@ -80,6 +82,7 @@
 #define IDM_DELETE_PROFILE  403
 #define IDM_OPEN_YKMANAGER  404
 #define IDM_ABOUT           406
+#define IDM_UPDATE_CHECK    407
 #define IDM_EXIT            400
 
 #define WGCP_TRAY_CLASS     L"WireGuardCPTrayClass"
@@ -123,6 +126,9 @@ private:
     WCHAR               _wszPin[64];
     WCHAR               _wszScStatusMsg[MAX_LABEL_WGCP];
     WCHAR               _wszYkSerial[32];    // Gecachte YubiKey-Seriennummer (async befüllt)
+    bool                _bAutoUpdateCheck;   // Update-Prüfung aktiviert (aus Registry)
+    bool                _bUpdateBalloonActive; // Update-Balloon sichtbar → Klick öffnet URL
+    WCHAR               _wszUpdateUrl[256];  // URL der neuesten Release-Seite
 
     static LRESULT CALLBACK _WndProc(HWND, UINT, WPARAM, LPARAM);
     static INT_PTR CALLBACK _PinDlgProc(HWND, UINT, WPARAM, LPARAM);
@@ -150,6 +156,11 @@ private:
     WCHAR _wszYkMgrPath[MAX_PATH];  // path found during menu build
     void _OpenConfigDir();
     void _ShowAboutDialog();
+    void _StartUpdateCheckThread();
+    void _StopUpdateCheckThread();
+    static DWORD WINAPI _UpdateCheckThread(LPVOID lpParam);
+    HANDLE _hUpdateThread;
+    HANDLE _hUpdateStop;
     static INT_PTR CALLBACK _AboutDlgProc(HWND, UINT, WPARAM, LPARAM);
     void _CheckAndRemoveWireGuardShortcut();
 
