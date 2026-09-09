@@ -1,9 +1,21 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the scheme `<Year>.<Month>.<Release>`.
+
+---
+
+## [2026.9.2] – 2026-09-09
+
+### Fixed
+
+- **Systray: VPN-Statuserkennung nach Lock-Screen-Verbindung** — _RefreshStatus() prüfte
+  nur das aktuell ausgewählte Profil. Wenn der Credential Provider vom Sperrbildschirm aus
+  einen Tunnel gestartet hatte und dieses Profil nicht mit dem Computernamen übereinstimmte,
+  blieb das Tray-Icon rot. Fix: nach negativem Ergebnis werden jetzt alle Profile geprüft;
+  das erste aktive Profil wird automatisch als ausgewähltes Profil übernommen.
 
 ---
 

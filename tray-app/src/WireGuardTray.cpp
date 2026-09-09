@@ -222,14 +222,40 @@ void WireGuardTrayApp::_LoadProfiles()
 // ---------------------------------------------------------------------------
 void WireGuardTrayApp::_RefreshStatus()
 {
-    if (_nProfiles == 0 || _nSelectedProfile >= _nProfiles)
+    if (_nProfiles == 0)
     {
         _bConnected = false;
         return;
     }
+
+    // Clamp stale index
+    if (_nSelectedProfile >= _nProfiles)
+        _nSelectedProfile = 0;
+
+    // Check the currently selected profile first (fast path).
     PCWSTR pwszProfile = _rgProfiles[_nSelectedProfile];
     _bConnected = WGIsTunnelConnected(pwszProfile);
     StringCchCopyW(_wszCurrentProfile, MAX_PATH_WGCP, pwszProfile);
+
+    // If the selected profile is not connected, scan ALL profiles to detect a
+    // tunnel that the Credential Provider may have started from the lock screen.
+    // This fixes the bug where the tray stays red after a pre-logon VPN connect.
+    if (!_bConnected)
+    {
+        for (int i = 0; i < _nProfiles; i++)
+        {
+            if (i == _nSelectedProfile)
+                continue;
+            if (WGIsTunnelConnected(_rgProfiles[i]))
+            {
+                _nSelectedProfile = i;
+                _bConnected = true;
+                StringCchCopyW(_wszCurrentProfile, MAX_PATH_WGCP, _rgProfiles[i]);
+                LOG_DEBUG(L"_RefreshStatus: active tunnel found via profile scan, updated selected profile");
+                break;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
