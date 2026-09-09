@@ -2259,6 +2259,70 @@ static INT_PTR CALLBACK _EditDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM 
     return FALSE;
 }
 
+// ---------------------------------------------------------------------------
+// _ImpersonateAsSystem  –  impersonate SYSTEM via winlogon.exe token
+//
+// WireGuard encrypts .conf.dpapi under SYSTEM's DPAPI context (no
+// CRYPTPROTECT_LOCAL_MACHINE flag).  An Administrator process must
+// impersonate SYSTEM to decrypt/encrypt those blobs.
+// Call RevertToSelf() after the DPAPI operation.
+// ---------------------------------------------------------------------------
+static bool _ImpersonateAsSystem()
+{
+    // Enable SeDebugPrivilege so we can open protected SYSTEM processes
+    HANDLE hSelf = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(),
+                         TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hSelf))
+    {
+        TOKEN_PRIVILEGES tp   = {};
+        tp.PrivilegeCount     = 1;
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        LookupPrivilegeValueW(nullptr, SE_DEBUG_NAME,
+                              &tp.Privileges[0].Luid);
+        AdjustTokenPrivileges(hSelf, FALSE, &tp, sizeof(tp),
+                              nullptr, nullptr);
+        CloseHandle(hSelf);
+    }
+
+    // Find winlogon.exe – always runs as SYSTEM
+    DWORD dwWinlogonPid = 0;
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap != INVALID_HANDLE_VALUE)
+    {
+        PROCESSENTRY32W pe = {};
+        pe.dwSize = sizeof(pe);
+        if (Process32FirstW(hSnap, &pe))
+        {
+            do {
+                if (_wcsicmp(pe.szExeFile, L"winlogon.exe") == 0)
+                { dwWinlogonPid = pe.th32ProcessID; break; }
+            } while (Process32NextW(hSnap, &pe));
+        }
+        CloseHandle(hSnap);
+    }
+    if (!dwWinlogonPid) return false;
+
+    HANDLE hProc = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, dwWinlogonPid);
+    if (!hProc) return false;
+
+    HANDLE hSysToken = nullptr;
+    bool bOk = false;
+    if (OpenProcessToken(hProc, TOKEN_DUPLICATE, &hSysToken))
+    {
+        HANDLE hImpToken = nullptr;
+        if (DuplicateTokenEx(hSysToken,
+                             TOKEN_IMPERSONATE | TOKEN_QUERY,
+                             nullptr, SecurityImpersonation,
+                             TokenImpersonation, &hImpToken))
+        {
+            bOk = SetThreadToken(nullptr, hImpToken) != FALSE;
+            CloseHandle(hImpToken);
+        }
+        CloseHandle(hSysToken);
+    }
+    CloseHandle(hProc);
+    return bOk;
+}
 void WireGuardTrayApp::_EditProfile(int profileIndex)
 {
     if (profileIndex < 0 || profileIndex >= _nProfiles) return;
@@ -2301,24 +2365,28 @@ void WireGuardTrayApp::_EditProfile(int profileIndex)
     }
     CloseHandle(hFile);
 
-    // --- DPAPI decrypt (LOCAL_MACHINE scope) ---
+    // --- DPAPI decrypt under SYSTEM context ---
+    // WireGuard encrypts without CRYPTPROTECT_LOCAL_MACHINE (SYSTEM user scope).
+    // We must impersonate SYSTEM to decrypt.
     DATA_BLOB blobIn  = { dwRead, pbEncrypted };
     DATA_BLOB blobOut = { 0, nullptr };
-    if (!CryptUnprotectData(&blobIn, nullptr, nullptr, nullptr, nullptr,
-                             CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN,
-                             &blobOut))
+    bool bImpersonated = _ImpersonateAsSystem();
+    BOOL bDecOk = CryptUnprotectData(&blobIn, nullptr, nullptr,
+                                      nullptr, nullptr, 0, &blobOut);
+    DWORD dwDecErr = GetLastError();
+    if (bImpersonated) RevertToSelf();
+    delete[] pbEncrypted;
+    if (!bDecOk)
     {
-        delete[] pbEncrypted;
         WCHAR wszErr[128] = {};
         StringCchPrintfW(wszErr, ARRAYSIZE(wszErr),
             T(L"Entschl\u00FCsselung fehlgeschlagen (Fehler %lu).",
               L"Decryption failed (error %lu)."),
-            GetLastError());
+            dwDecErr);
         MessageBoxW(_hWnd, wszErr, T(L"Fehler", L"Error"),
                     MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
         return;
     }
-    delete[] pbEncrypted;
 
     // Convert decrypted bytes (UTF-8) to wide string for the editor
     int cchWide = MultiByteToWideChar(CP_UTF8, 0,
@@ -2560,26 +2628,28 @@ void WireGuardTrayApp::_EditProfile(int profileIndex)
     delete[] dlgData.pwszResult;
     cbUtf8--;  // exclude null terminator from encryption
 
-    // --- DPAPI re-encrypt ---
+    // --- DPAPI re-encrypt under SYSTEM context (same scope WireGuard used) ---
     DATA_BLOB blobPlain  = { static_cast<DWORD>(cbUtf8),
                              reinterpret_cast<BYTE*>(pUtf8) };
     DATA_BLOB blobCipher = { 0, nullptr };
-    if (!CryptProtectData(&blobPlain, nullptr, nullptr, nullptr, nullptr,
-                           CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN,
-                           &blobCipher))
+    bImpersonated = _ImpersonateAsSystem();
+    BOOL bEncOk = CryptProtectData(&blobPlain, nullptr, nullptr,
+                                    nullptr, nullptr, 0, &blobCipher);
+    DWORD dwEncErr = GetLastError();
+    if (bImpersonated) RevertToSelf();
+    delete[] pUtf8;
+    if (!bEncOk)
     {
-        delete[] pUtf8;
         WCHAR wszErr[128] = {};
         StringCchPrintfW(wszErr, ARRAYSIZE(wszErr),
             T(L"Verschl\u00FCsselung fehlgeschlagen (Fehler %lu).",
               L"Encryption failed (error %lu)."),
-            GetLastError());
+            dwEncErr);
         MessageBoxW(_hWnd, wszErr, T(L"Fehler", L"Error"),
                     MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
         if (bWasConnected) _Connect(_nSelectedProfile);
         return;
     }
-    delete[] pUtf8;
 
     // --- Write back to .conf.dpapi (atomic: write to temp, then MoveFileEx) ---
     WCHAR wszTmpPath[MAX_PATH_WGCP] = {};
