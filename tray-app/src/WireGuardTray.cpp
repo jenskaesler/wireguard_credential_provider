@@ -66,6 +66,11 @@ WireGuardTrayApp::WireGuardTrayApp()
     ZeroMemory(_wszPin,            sizeof(_wszPin));
     ZeroMemory(_wszScStatusMsg,    sizeof(_wszScStatusMsg));
     ZeroMemory(_wszYkSerial,       sizeof(_wszYkSerial));
+    _bAutoUpdateCheck     = false;
+    _bUpdateBalloonActive = false;
+    ZeroMemory(_wszUpdateUrl, sizeof(_wszUpdateUrl));
+    _hUpdateThread        = nullptr;
+    _hUpdateStop          = nullptr;
 }
 
 WireGuardTrayApp::~WireGuardTrayApp()
@@ -569,11 +574,6 @@ void WireGuardTrayApp::_ShowContextMenu()
         {
             // Karte nicht mehr da: Serial-Cache leeren
             ZeroMemory(_wszYkSerial, sizeof(_wszYkSerial));
-    _bAutoUpdateCheck   = false;
-    _bUpdateBalloonActive = false;
-    ZeroMemory(_wszUpdateUrl, sizeof(_wszUpdateUrl));
-    _hUpdateThread = nullptr;
-    _hUpdateStop   = nullptr;
             StringCchCopyW(wszYkLine, 128,
                 T(L"\U0001F511  YubiKey nicht erkannt",
                   L"\U0001F511  YubiKey not detected"));
@@ -604,8 +604,8 @@ void WireGuardTrayApp::_ShowContextMenu()
         }
         if (_wszYkMgrPath[0])
             AppendMenuW(hMenu, MF_STRING, IDM_OPEN_YKMANAGER,
-                T(L"   Yubico Authenticator \u00F6ffnen...",
-                  L"   Open Yubico Authenticator..."));
+                T(L"\U0001F511  Yubico Authenticator \u00F6ffnen...",
+                  L"\U0001F511  Open Yubico Authenticator..."));
 
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     }
@@ -622,12 +622,12 @@ void WireGuardTrayApp::_ShowContextMenu()
 
     AppendMenuW(hMenu, (_bAutoUpdateCheck ? MF_CHECKED : MF_UNCHECKED) | MF_STRING,
         IDM_UPDATE_CHECK,
-        T(L"\U0001F504 Auf Updates pr\u00FCfen", L"\U0001F504 Check for updates"));
+        T(L"\U0001F504  Auf Updates pr\u00FCfen", L"\U0001F504  Check for updates"));
     AppendMenuW(hMenu, MF_STRING, IDM_ABOUT,
-        T(L"\u2139 Informationen...", L"\u2139 About..."));
+        T(L"\u2139  Informationen...", L"\u2139  About..."));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, IDM_EXIT,
-        T(L"❌ Beenden", L"❌ Exit"));
+        T(L"❌  Beenden", L"❌  Exit"));
 
     // -----------------------------------------------------------------------
     // Menue anzeigen
