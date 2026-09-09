@@ -2388,12 +2388,8 @@ void WireGuardTrayApp::_OpenYubiKeyManager()
 
 
 // ---------------------------------------------------------------------------
-// _AboutDlgProc / _ShowAboutDialog
-// Modal info dialog – gleiche Optik wie PIN-Dialog:
-//   dunkelblaue Header-Zone, Segoe UI, horizontaler Separator
+// _GetDisplayVersion – Version aus Windows-Uninstall-Key lesen
 // ---------------------------------------------------------------------------
-
-// Helper: DisplayVersion aus Windows-Uninstall-Key lesen
 static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
 {
     HKEY hKey = nullptr;
@@ -2412,268 +2408,49 @@ static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
     }
 }
 
-// Dialog-Konstanten
-#define IDC_ABOUT_HDR_BG   701   // owner-draw header background
-#define IDC_ABOUT_HDR_ICON 702
-#define IDC_ABOUT_HDR_TITLE 703
-#define IDC_ABOUT_HDR_SUB  704
-#define IDC_ABOUT_CLOSE    705
-#define IDC_ABOUT_LINK     706
-
-#define ABOUT_HDR_H   54    // px – Höhe der dunkelblauen Header-Zone
-#define ABOUT_W       380   // Dialogbreite px
-#define ABOUT_H       240   // Dialoghöhe px
-
-struct AboutDlgData
-{
-    WCHAR wszVersion[64];
-};
-
-INT_PTR CALLBACK WireGuardTrayApp::_AboutDlgProc(HWND hDlg, UINT uMsg,
-                                                   WPARAM wParam, LPARAM lParam)
-{
-    static HFONT s_hFontBold = nullptr;
-    static HFONT s_hFontSub  = nullptr;
-    static HFONT s_hFontUI   = nullptr;
-    static HFONT s_hFontLink = nullptr;
-    static HBRUSH s_hBrHdr   = nullptr;
-
-    switch (uMsg)
-    {
-    case WM_INITDIALOG:
-    {
-        AboutDlgData* pData = reinterpret_cast<AboutDlgData*>(lParam);
-
-        SetWindowTextW(hDlg, T(L"Informationen", L"About"));
-
-        // Fenstergröße setzen und auf Bildschirm zentrieren
-        int scx = GetSystemMetrics(SM_CXSCREEN);
-        int scy = GetSystemMetrics(SM_CYSCREEN);
-        SetWindowPos(hDlg, nullptr,
-                     (scx - ABOUT_W) / 2, (scy - ABOUT_H) / 2,
-                     ABOUT_W, ABOUT_H, SWP_NOZORDER);
-
-        // Fonts
-        s_hFontBold = CreateFontW(16, 0,0,0, FW_BOLD, FALSE,FALSE,FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH|FF_DONTCARE, L"Segoe UI");
-        s_hFontSub = CreateFontW(12, 0,0,0, FW_NORMAL, FALSE,FALSE,FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH|FF_DONTCARE, L"Segoe UI");
-        s_hFontUI  = CreateFontW(13, 0,0,0, FW_NORMAL, FALSE,FALSE,FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH|FF_DONTCARE, L"Segoe UI");
-        s_hFontLink = CreateFontW(13, 0,0,0, FW_NORMAL, FALSE,TRUE,FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH|FF_DONTCARE, L"Segoe UI");
-        s_hBrHdr   = CreateSolidBrush(RGB(0x1a, 0x3a, 0x5c));
-
-        // --- Header-Zone (dunkelblaue Fläche, owner-draw) ---
-        CreateWindowExW(0, L"STATIC", L"",
-            WS_CHILD|WS_VISIBLE|SS_OWNERDRAW,
-            0, 0, ABOUT_W, ABOUT_HDR_H,
-            hDlg, reinterpret_cast<HMENU>(IDC_ABOUT_HDR_BG), nullptr, nullptr);
-
-        // Icon (Schloss) aus Shell – gleiche Quelle wie PIN-Dialog
-        HWND hIcon = CreateWindowExW(0, L"STATIC", L"",
-            WS_CHILD|WS_VISIBLE|SS_ICON|SS_CENTERIMAGE,
-            10, 10, 32, 32,
-            hDlg, reinterpret_cast<HMENU>(IDC_ABOUT_HDR_ICON), nullptr, nullptr);
-        HICON hIco = static_cast<HICON>(LoadImageW(nullptr,
-            MAKEINTRESOURCEW(32516), IMAGE_ICON, 24, 24, LR_SHARED));
-        if (!hIco) hIco = LoadIconW(nullptr, IDI_ASTERISK);
-        SendMessageW(hIcon, STM_SETICON, reinterpret_cast<WPARAM>(hIco), 0);
-
-        // Titel in Header
-        HWND hTitle = CreateWindowExW(0, L"STATIC",
-            L"WireGuard Credential Provider",
-            WS_CHILD|WS_VISIBLE|SS_LEFT,
-            50, 11, ABOUT_W - 60, 18,
-            hDlg, reinterpret_cast<HMENU>(IDC_ABOUT_HDR_TITLE), nullptr, nullptr);
-        SendMessageW(hTitle, WM_SETFONT, reinterpret_cast<WPARAM>(s_hFontBold), TRUE);
-
-        // Untertitel in Header
-        WCHAR wszSub[128];
-        StringCchPrintfW(wszSub, ARRAYSIZE(wszSub),
-            T(L"Version %s  \u2013  \u00A9 2026 Jens Kaesler",
-              L"Version %s  \u2013  \u00A9 2026 Jens Kaesler"),
-            pData->wszVersion);
-        HWND hSub = CreateWindowExW(0, L"STATIC", wszSub,
-            WS_CHILD|WS_VISIBLE|SS_LEFT,
-            50, 32, ABOUT_W - 60, 14,
-            hDlg, reinterpret_cast<HMENU>(IDC_ABOUT_HDR_SUB), nullptr, nullptr);
-        SendMessageW(hSub, WM_SETFONT, reinterpret_cast<WPARAM>(s_hFontSub), TRUE);
-
-        // --- Separator ---
-        CreateWindowExW(0, L"STATIC", L"",
-            WS_CHILD|WS_VISIBLE|SS_ETCHEDHORZ,
-            0, ABOUT_HDR_H, ABOUT_W, 1,
-            hDlg, nullptr, nullptr, nullptr);
-
-        // --- Body-Inhalt ---
-        int y = ABOUT_HDR_H + 16;
-        const int M = 14;
-        const int W = ABOUT_W - 2*M;
-
-        // Beschreibung
-        HWND hDesc = CreateWindowExW(0, L"STATIC",
-            T(L"WireGuard-Anmeldeanbieter f\u00FCr Windows-Dom\u00E4nen mit "
-              L"YubiKey / Smartcard-Unterst\u00FCtzung.",
-              L"WireGuard credential provider for Windows domains with "
-              L"YubiKey / smartcard support."),
-            WS_CHILD|WS_VISIBLE|SS_LEFT,
-            M, y, W, 36,
-            hDlg, nullptr, nullptr, nullptr);
-        SendMessageW(hDesc, WM_SETFONT, reinterpret_cast<WPARAM>(s_hFontUI), TRUE);
-        y += 44;
-
-        // Separator
-        CreateWindowExW(0, L"STATIC", L"",
-            WS_CHILD|WS_VISIBLE|SS_ETCHEDHORZ,
-            M, y, W, 1,
-            hDlg, nullptr, nullptr, nullptr);
-        y += 12;
-
-        // GitHub-Link als Button (owner-draw)
-        HWND hLink = CreateWindowExW(0, L"BUTTON",
-            L"github.com/jenskaesler/wireguard_credential_provider",
-            WS_CHILD|WS_VISIBLE|BS_OWNERDRAW,
-            M, y, W, 20,
-            hDlg, reinterpret_cast<HMENU>(IDC_ABOUT_LINK), nullptr, nullptr);
-        SendMessageW(hLink, WM_SETFONT, reinterpret_cast<WPARAM>(s_hFontLink), TRUE);
-        y += 32;
-
-        // Separator vor Schließen-Button
-        CreateWindowExW(0, L"STATIC", L"",
-            WS_CHILD|WS_VISIBLE|SS_ETCHEDHORZ,
-            0, ABOUT_H - 50, ABOUT_W, 1,
-            hDlg, nullptr, nullptr, nullptr);
-
-        // Schließen-Button (rechts ausgerichtet)
-        HWND hClose = CreateWindowExW(0, L"BUTTON",
-            T(L"Schlie\u00DFen", L"Close"),
-            WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON,
-            ABOUT_W - 14 - 90, ABOUT_H - 40, 90, 26,
-            hDlg, reinterpret_cast<HMENU>(IDC_ABOUT_CLOSE), nullptr, nullptr);
-        SendMessageW(hClose, WM_SETFONT, reinterpret_cast<WPARAM>(s_hFontUI), TRUE);
-
-        SetFocus(hClose);
-        return FALSE;  // Fokus manuell gesetzt
-    }
-
-    case WM_CTLCOLORSTATIC:
-    {
-        // Header-Controls: weiße Schrift auf dunkelblauem Hintergrund
-        HWND hCtrl = reinterpret_cast<HWND>(lParam);
-        RECT rc; GetWindowRect(hCtrl, &rc);
-        POINT pt = { rc.left, rc.top };
-        ScreenToClient(hDlg, &pt);
-        if (pt.y < ABOUT_HDR_H && s_hBrHdr)
-        {
-            HDC hdc = reinterpret_cast<HDC>(wParam);
-            SetBkColor(hdc, RGB(0x1a, 0x3a, 0x5c));
-            SetTextColor(hdc, RGB(0xFF, 0xFF, 0xFF));
-            return reinterpret_cast<INT_PTR>(s_hBrHdr);
-        }
-        return FALSE;
-    }
-
-    case WM_DRAWITEM:
-    {
-        LPDRAWITEMSTRUCT pDI = reinterpret_cast<LPDRAWITEMSTRUCT>(lParam);
-
-        if (pDI->CtlID == IDC_ABOUT_HDR_BG)
-        {
-            // Header-Hintergrundfläche füllen
-            FillRect(pDI->hDC, &pDI->rcItem,
-                     s_hBrHdr ? s_hBrHdr : (HBRUSH)GetStockObject(DKGRAY_BRUSH));
-            return TRUE;
-        }
-
-        if (pDI->CtlID == IDC_ABOUT_LINK)
-        {
-            // GitHub-Link: blau, unterstrichen
-            SetTextColor(pDI->hDC, RGB(0x00, 0x66, 0xCC));
-            SetBkMode(pDI->hDC, TRANSPARENT);
-            FillRect(pDI->hDC, &pDI->rcItem,
-                     (HBRUSH)(COLOR_BTNFACE + 1));
-
-            HFONT hOld = reinterpret_cast<HFONT>(
-                SelectObject(pDI->hDC, s_hFontLink));
-            WCHAR wszLinkText[128] = {};
-            GetWindowTextW(GetDlgItem(hDlg, IDC_ABOUT_LINK),
-                           wszLinkText, ARRAYSIZE(wszLinkText));
-            DrawTextW(pDI->hDC, wszLinkText, -1, &pDI->rcItem,
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-            SelectObject(pDI->hDC, hOld);
-
-            // Unterstreichung
-            RECT rcUl = pDI->rcItem;
-            SIZE sz = {};
-            GetTextExtentPoint32W(pDI->hDC, wszLinkText,
-                                  (int)wcslen(wszLinkText), &sz);
-            rcUl.top    = pDI->rcItem.top + (pDI->rcItem.bottom - pDI->rcItem.top)/2 + 8;
-            rcUl.bottom = rcUl.top + 1;
-            rcUl.right  = pDI->rcItem.left + sz.cx;
-            HBRUSH hBrLine = CreateSolidBrush(RGB(0x00, 0x66, 0xCC));
-            FillRect(pDI->hDC, &rcUl, hBrLine);
-            DeleteObject(hBrLine);
-            return TRUE;
-        }
-        return FALSE;
-    }
-
-    case WM_COMMAND:
-        if (LOWORD(wParam) == IDC_ABOUT_CLOSE || LOWORD(wParam) == IDCANCEL)
-        {
-            EndDialog(hDlg, 0);
-            return TRUE;
-        }
-        if (LOWORD(wParam) == IDC_ABOUT_LINK)
-        {
-            ShellExecuteW(nullptr, L"open", WGCP_GITHUB_URL,
-                          nullptr, nullptr, SW_SHOWNORMAL);
-            return TRUE;
-        }
-        break;
-
-    case WM_DESTROY:
-        if (s_hFontBold) { DeleteObject(s_hFontBold); s_hFontBold = nullptr; }
-        if (s_hFontSub)  { DeleteObject(s_hFontSub);  s_hFontSub  = nullptr; }
-        if (s_hFontUI)   { DeleteObject(s_hFontUI);   s_hFontUI   = nullptr; }
-        if (s_hFontLink) { DeleteObject(s_hFontLink); s_hFontLink = nullptr; }
-        if (s_hBrHdr)    { DeleteObject(s_hBrHdr);    s_hBrHdr    = nullptr; }
-        break;
-    }
-    return FALSE;
-}
-
+// ---------------------------------------------------------------------------
+// _ShowAboutDialog – Informationen als MessageBox
+// ---------------------------------------------------------------------------
 void WireGuardTrayApp::_ShowAboutDialog()
 {
-    // Dialoglayout: 380 x 240 px, Header 54 px (dunkelblau), Body, GitHub-Link, Schließen
-    // Kein .rc-Template erforderlich – identisches Muster wie _ShowPinDialog()
+    WCHAR wszVersion[64] = {};
+    _GetDisplayVersion(wszVersion, ARRAYSIZE(wszVersion));
 
-    // Minimales DLGTEMPLATE (leer – alle Controls in WM_INITDIALOG via CreateWindowExW)
-    struct AlignedDlgBuf
-    {
-        DLGTEMPLATE tmpl;
-        WORD        rgPad[4];   // menu=0, class=0, title=L'\0', font-size(0=kein Font)
-    } buf = {};
-    buf.tmpl.style      = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_CENTER;
-    buf.tmpl.cx         = 200;  // DLU (wird in WM_INITDIALOG per SetWindowPos überschrieben)
-    buf.tmpl.cy         = 120;
+    WCHAR wszMsg[512] = {};
+    StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+        T(
+            L"Version:    %s\r\n"
+            L"\u00A9 2026 Jens Kaesler\r\n"
+            L"\r\n"
+            L"WireGuard-Anmeldeanbieter f\u00FCr Windows-Dom\u00E4nen\r\n"
+            L"mit YubiKey / Smartcard-Unterst\u00FCtzung.\r\n"
+            L"\r\n"
+            L"github.com/jenskaesler/wireguard_credential_provider",
+            L"Version:    %s\r\n"
+            L"\u00A9 2026 Jens Kaesler\r\n"
+            L"\r\n"
+            L"WireGuard credential provider for Windows domains\r\n"
+            L"with YubiKey / smartcard support.\r\n"
+            L"\r\n"
+            L"github.com/jenskaesler/wireguard_credential_provider"
+        ),
+        wszVersion);
 
-    AboutDlgData data = {};
-    _GetDisplayVersion(data.wszVersion, ARRAYSIZE(data.wszVersion));
+    MessageBoxW(_hWnd, wszMsg,
+        T(L"WireGuard Credential Provider \u2013 Informationen",
+          L"WireGuard Credential Provider \u2013 About"),
+        MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
 
-    DialogBoxIndirectParamW(_hInst,
-                            &buf.tmpl,
-                            _hWnd,
-                            _AboutDlgProc,
-                            reinterpret_cast<LPARAM>(&data));
+    int nOpen = MessageBoxW(_hWnd,
+        T(L"GitHub-Repository im Browser \u00F6ffnen?",
+          L"Open GitHub repository in browser?"),
+        T(L"GitHub", L"GitHub"),
+        MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND);
+    if (nOpen == IDYES)
+        ShellExecuteW(nullptr, L"open", WGCP_GITHUB_URL, nullptr, nullptr, SW_SHOWNORMAL);
 }
 
-// ---------------------------------------------------------------------------
+
 // Update-Prüfung: _StartUpdateCheckThread / _StopUpdateCheckThread / _UpdateCheckThread
 //
 // Ablauf:

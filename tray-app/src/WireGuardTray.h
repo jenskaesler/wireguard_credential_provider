@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 //
 // WireGuardTray.h
 //
@@ -161,7 +161,6 @@ private:
     static DWORD WINAPI _UpdateCheckThread(LPVOID lpParam);
     HANDLE _hUpdateThread;
     HANDLE _hUpdateStop;
-    static INT_PTR CALLBACK _AboutDlgProc(HWND, UINT, WPARAM, LPARAM);
     void _CheckAndRemoveWireGuardShortcut();
 
     // WireGuard UI Watcher
