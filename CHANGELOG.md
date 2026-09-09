@@ -7,6 +7,17 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.9.5] – 2026-09-10
+
+### Fixed
+
+- **Systray: About-Dialog Layout und Transparenz** — Hintergrund der Static-Controls
+  transparent (WM_CTLCOLORSTATIC + TRANSPARENT bkmode), GitHub-SysLink jetzt
+  sichtbar (ICC_LINK_CLASS in InitCommonControlsEx, LWS_NOPREFIX-Flag), Layout
+  überarbeitet (Version + Copyright getrennte Zeilen, korrekte y-Positionen).
+
+---
+
 ## [2026.9.4] – 2026-09-10
 
 ### Changed

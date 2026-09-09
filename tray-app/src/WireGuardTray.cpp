@@ -2886,6 +2886,10 @@ void WireGuardTrayApp::_OpenYubiKeyManager()
 // Priority: 1) Installer registry (DisplayVersion)
 //           2) EXE file version resource (FILEVERSION)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// _GetDisplayVersion
+// Priority: 1) Installer registry  2) EXE FILEVERSION resource
+// ---------------------------------------------------------------------------
 static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
 {
     // 1) Installer registry
@@ -2901,7 +2905,7 @@ static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
             return;
     }
 
-    // 2) EXE file version
+    // 2) EXE file version resource
     WCHAR wszExe[MAX_PATH] = {};
     if (GetModuleFileNameW(nullptr, wszExe, MAX_PATH) > 0)
     {
@@ -2909,23 +2913,23 @@ static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
         DWORD dwSize  = GetFileVersionInfoSizeW(wszExe, &dwDummy);
         if (dwSize > 0)
         {
-            BYTE* pVerData = new(std::nothrow) BYTE[dwSize];
-            if (pVerData && GetFileVersionInfoW(wszExe, 0, dwSize, pVerData))
+            BYTE* pVer = new(std::nothrow) BYTE[dwSize];
+            if (pVer && GetFileVersionInfoW(wszExe, 0, dwSize, pVer))
             {
                 VS_FIXEDFILEINFO* pFI = nullptr;
                 UINT uLen = 0;
-                if (VerQueryValueW(pVerData, L"\\",
+                if (VerQueryValueW(pVer, L"\\",
                                    reinterpret_cast<LPVOID*>(&pFI), &uLen) && pFI)
                 {
                     StringCchPrintfW(pwszBuf, cchBuf, L"%u.%u.%u",
                         HIWORD(pFI->dwProductVersionMS),
                         LOWORD(pFI->dwProductVersionMS),
                         HIWORD(pFI->dwProductVersionLS));
-                    delete[] pVerData;
+                    delete[] pVer;
                     return;
                 }
             }
-            delete[] pVerData;
+            delete[] pVer;
         }
     }
 
@@ -2933,149 +2937,185 @@ static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
 }
 
 // ---------------------------------------------------------------------------
-// _ShowAboutDialog – eigener Dialog mit Header, Links und Version
+// About-Dialog  (eigenes Fenster, kein .rc-Template)
+//
+// Layout (420 x 270 px):
+//   [0..56]   Dunkelblauer Header-Streifen  (#1A376E)
+//   [56..64]  1px dunkle Linie
+//   [68]      Icon (32x32) + Version-Label (bold) + Copyright
+//   [116]     Beschreibungstext (2 Zeilen)
+//   [158]     GitHub-SysLink
+//   [214]     Trennlinie
+//   [224]     OK-Button (zentriert)
 // ---------------------------------------------------------------------------
 
-// Daten fuer den About-Dialog
-struct AboutDlgData
-{
-    PCWSTR pwszVersion;
-    PCWSTR pwszGitHubUrl;
-    HWND   hParent;
-};
+// Control-IDs (lokale Konstanten)
+enum { IDC_ABT_ICON=10, IDC_ABT_VER, IDC_ABT_CPY, IDC_ABT_DESC, IDC_ABT_LINK, IDC_ABT_SEP };
 
-// WndProc des About-Fensters (statische Lambda-freie Funktion)
+struct AboutDlgData { PCWSTR ver; PCWSTR url; HWND hParent; HINSTANCE hInst; };
+
+// Schriftarten – einmal beim WM_CREATE erstellt, bei WM_DESTROY freigegeben
+struct AboutFonts { HFONT hBold; HFONT hNormal; };
+
 static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    static AboutDlgData* s_pd = nullptr;
+    static AboutDlgData* s_pd    = nullptr;
+    static AboutFonts    s_fonts = {};
+    static HBRUSH        s_hbrDialog = nullptr;  // COLOR_BTNFACE brush
 
     switch (msg)
     {
+    // ------------------------------------------------------------------
     case WM_CREATE:
     {
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
         s_pd = reinterpret_cast<AboutDlgData*>(cs->lpCreateParams);
 
-        // ---- Layout constants (dialog units approximated) ----
-        const int PAD   = 14;
-        const int HDR_H = 52;
-        const int W     = 420;
-        const int H     = 260;
-        const int BTN_W = 88;
-        const int BTN_H = 28;
+        // Fonts
+        HDC hdc = GetDC(hWnd);
+        int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
+        ReleaseDC(hWnd, hdc);
+        s_fonts.hBold   = CreateFontW(-MulDiv(10,dpi,72),0,0,0,FW_BOLD,  FALSE,FALSE,FALSE,
+                                       DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
+                                       CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
+        s_fonts.hNormal = CreateFontW(-MulDiv(10,dpi,72),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
+                                       DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
+                                       CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
+        s_hbrDialog = GetSysColorBrush(COLOR_BTNFACE);
 
-        // ---- Icon (standard info icon, 32x32) ----
-        HICON hIcon = LoadIconW(nullptr, IDI_INFORMATION);
-        CreateWindowExW(0, L"STATIC", L"",
-            WS_CHILD | WS_VISIBLE | SS_ICON | SS_CENTERIMAGE,
-            PAD, HDR_H + PAD, 32, 32,
-            hWnd, reinterpret_cast<HMENU>(1), nullptr, nullptr);
-        SendDlgItemMessageW(hWnd, 1, STM_SETICON,
-                            reinterpret_cast<WPARAM>(hIcon), 0);
+        const int PAD = 16;
+        const int X0  = PAD;
 
-        // ---- Version label ----
-        WCHAR wszVerLine[128] = {};
-        StringCchPrintfW(wszVerLine, ARRAYSIZE(wszVerLine),
-            T(L"Version %s  \u2013  \u00A9 2026 Jens Kaesler",
-              L"Version %s  \u2013  \u00A9 2026 Jens Kaesler"),
-            s_pd->pwszVersion);
-        CreateWindowExW(0, L"STATIC", wszVerLine,
-            WS_CHILD | WS_VISIBLE | SS_LEFT,
-            PAD + 32 + PAD, HDR_H + PAD + 4, W - PAD*3 - 32, 20,
-            hWnd, reinterpret_cast<HMENU>(2), nullptr, nullptr);
+        // -- Icon (SS_ICON, 32x32 at y=68) --
+        HWND hIco = CreateWindowExW(0, L"STATIC", L"",
+            WS_CHILD|WS_VISIBLE|SS_ICON|SS_CENTERIMAGE,
+            X0, 68, 32, 32, hWnd,
+            reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_ICON)),
+            s_pd->hInst, nullptr);
+        HICON hIcon = static_cast<HICON>(LoadImageW(nullptr, IDI_INFORMATION,
+            IMAGE_ICON, 32, 32, LR_SHARED));
+        SendMessageW(hIco, STM_SETICON, reinterpret_cast<WPARAM>(hIcon), 0);
 
-        // ---- Description ----
+        // -- Version (bold, x=60, y=72) --
+        WCHAR wszVer[128] = {};
+        StringCchPrintfW(wszVer, ARRAYSIZE(wszVer), L"Version %s", s_pd->ver);
+        HWND hVer = CreateWindowExW(0, L"STATIC", wszVer,
+            WS_CHILD|WS_VISIBLE|SS_LEFT,
+            60, 72, 330, 20, hWnd,
+            reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_VER)),
+            s_pd->hInst, nullptr);
+        SendMessageW(hVer, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hBold), TRUE);
+
+        // -- Copyright (normal, x=60, y=94) --
+        HWND hCpy = CreateWindowExW(0, L"STATIC", L"© 2026 Jens Kaesler",
+            WS_CHILD|WS_VISIBLE|SS_LEFT,
+            60, 96, 330, 18, hWnd,
+            reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_CPY)),
+            s_pd->hInst, nullptr);
+        SendMessageW(hCpy, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
+
+        // -- Description (2 lines, y=124) --
         PCWSTR pwszDesc = T(
-            L"WireGuard-Anmeldeanbieter f\u00FCr Windows-Dom\u00E4nen\r\n"
-            L"mit YubiKey / Smartcard-Unterst\u00FCtzung.",
+            L"WireGuard-Anmeldeanbieter für Windows-Domänen\r\n"
+            L"mit YubiKey / Smartcard-Unterstützung.",
             L"WireGuard credential provider for Windows domains\r\n"
             L"with YubiKey / smartcard support.");
-        CreateWindowExW(0, L"STATIC", pwszDesc,
-            WS_CHILD | WS_VISIBLE | SS_LEFT,
-            PAD + 32 + PAD, HDR_H + PAD + 28, W - PAD*3 - 32, 40,
-            hWnd, reinterpret_cast<HMENU>(3), nullptr, nullptr);
+        HWND hDesc = CreateWindowExW(0, L"STATIC", pwszDesc,
+            WS_CHILD|WS_VISIBLE|SS_LEFT,
+            X0, 124, 388, 38, hWnd,
+            reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_DESC)),
+            s_pd->hInst, nullptr);
+        SendMessageW(hDesc, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
 
-        // ---- GitHub SysLink ----
+        // -- GitHub SysLink (y=170) --
         WCHAR wszLink[512] = {};
         StringCchPrintfW(wszLink, ARRAYSIZE(wszLink),
             L"<a href=\"%s\">github.com/jenskaesler/wireguard_credential_provider</a>",
-            s_pd->pwszGitHubUrl);
-        CreateWindowExW(0, WC_LINK, wszLink,
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            PAD, HDR_H + PAD + 80, W - PAD*2, 20,
-            hWnd, reinterpret_cast<HMENU>(4), nullptr, nullptr);
+            s_pd->url);
+        HWND hLink = CreateWindowExW(0, WC_LINK, wszLink,
+            WS_CHILD|WS_VISIBLE|WS_TABSTOP|LWS_NOPREFIX,
+            X0, 170, 388, 22, hWnd,
+            reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_LINK)),
+            s_pd->hInst, nullptr);
+        SendMessageW(hLink, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
 
-        // ---- Separator ----
+        // -- Separator STATIC (SS_ETCHEDHORZ, y=212) --
         CreateWindowExW(0, L"STATIC", L"",
-            WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
-            0, H - BTN_H - PAD*2 - 2, W, 2,
-            hWnd, reinterpret_cast<HMENU>(5), nullptr, nullptr);
+            WS_CHILD|WS_VISIBLE|SS_ETCHEDHORZ,
+            0, 212, 420, 2, hWnd,
+            reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_SEP)),
+            s_pd->hInst, nullptr);
 
-        // ---- OK button ----
-        CreateWindowExW(0, L"BUTTON",
+        // -- OK button (centered, y=222) --
+        HWND hOK = CreateWindowExW(0, L"BUTTON",
             T(L"OK", L"OK"),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-            (W - BTN_W) / 2, H - BTN_H - PAD, BTN_W, BTN_H,
-            hWnd, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+            WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,
+            165, 222, 90, 28, hWnd,
+            reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDOK)),
+            s_pd->hInst, nullptr);
+        SendMessageW(hOK, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
 
         return 0;
     }
 
-    case WM_CTLCOLORSTATIC:
-    {
-        // Paint static controls in the header zone (top 52 px client) with white text
-        HWND hCtrl = reinterpret_cast<HWND>(lParam);
-        RECT rcCtrl;
-        GetWindowRect(hCtrl, &rcCtrl);
-        POINT ptTopLeft = { rcCtrl.left, rcCtrl.top };
-        ScreenToClient(hWnd, &ptTopLeft);
-        if (ptTopLeft.y < 52)
-        {
-            SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
-            SetTextColor(reinterpret_cast<HDC>(wParam), RGB(0xFF, 0xFF, 0xFF));
-            return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
-        }
-        return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
-    }
+    // ------------------------------------------------------------------
+    case WM_DESTROY:
+        if (s_fonts.hBold)   { DeleteObject(s_fonts.hBold);   s_fonts.hBold   = nullptr; }
+        if (s_fonts.hNormal) { DeleteObject(s_fonts.hNormal); s_fonts.hNormal = nullptr; }
+        return 0;
 
+    // ------------------------------------------------------------------
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hWnd, &ps);
-        RECT rcClient;
-        GetClientRect(hWnd, &rcClient);
 
         // Dark blue header strip
-        RECT rcHeader = { 0, 0, rcClient.right, 52 };
+        RECT rcHdr = { 0, 0, 420, 56 };
         HBRUSH hbrHdr = CreateSolidBrush(RGB(0x1a, 0x37, 0x6e));
-        FillRect(hdc, &rcHeader, hbrHdr);
+        FillRect(hdc, &rcHdr, hbrHdr);
         DeleteObject(hbrHdr);
 
-        // App title in header
-        HFONT hFontTitle = CreateFontW(
-            -MulDiv(13, GetDeviceCaps(hdc, LOGPIXELSY), 72),
-            0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        HFONT hOldFont = static_cast<HFONT>(SelectObject(hdc, hFontTitle));
+        // 1px border line below header
+        RECT rcLine = { 0, 56, 420, 57 };
+        HBRUSH hbrLine = CreateSolidBrush(RGB(0x0d, 0x1c, 0x40));
+        FillRect(hdc, &rcLine, hbrLine);
+        DeleteObject(hbrLine);
 
+        // App title in header (Segoe UI Bold 14pt, white)
+        HDC hdcTmp = GetDC(hWnd);
+        int dpi = GetDeviceCaps(hdcTmp, LOGPIXELSY);
+        ReleaseDC(hWnd, hdcTmp);
+        HFONT hFTitle = CreateFontW(
+            -MulDiv(14, dpi, 72), 0,0,0, FW_BOLD, FALSE,FALSE,FALSE,
+            DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH|FF_DONTCARE, L"Segoe UI");
+        HFONT hOld = static_cast<HFONT>(SelectObject(hdc, hFTitle));
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, RGB(0xFF, 0xFF, 0xFF));
-        RECT rcTitle = { 14, 10, rcClient.right - 14, 52 };
+        RECT rcTitle = { 16, 0, 404, 56 };
         DrawTextW(hdc, L"WireGuard Credential Provider", -1,
-                  &rcTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_WORD_ELLIPSIS);
-
-        SelectObject(hdc, hOldFont);
-        DeleteObject(hFontTitle);
+                  &rcTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, hOld);
+        DeleteObject(hFTitle);
 
         EndPaint(hWnd, &ps);
         return 0;
     }
 
+    // ------------------------------------------------------------------
+    // Make all child static controls transparent (no colored background box)
+    case WM_CTLCOLORSTATIC:
+        SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
+        SetTextColor(reinterpret_cast<HDC>(wParam), GetSysColor(COLOR_WINDOWTEXT));
+        return reinterpret_cast<LRESULT>(s_hbrDialog ? s_hbrDialog
+                                                      : GetStockObject(NULL_BRUSH));
+
+    // ------------------------------------------------------------------
     case WM_NOTIFY:
     {
-        auto* pNMHdr = reinterpret_cast<NMHDR*>(lParam);
-        if (pNMHdr->idFrom == 4 && pNMHdr->code == NM_CLICK)
+        auto* pNM = reinterpret_cast<NMHDR*>(lParam);
+        if (pNM->idFrom == IDC_ABT_LINK && pNM->code == NM_CLICK)
         {
             auto* pLink = reinterpret_cast<NMLINK*>(lParam);
             ShellExecuteW(nullptr, L"open", pLink->item.szUrl,
@@ -3084,28 +3124,18 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
         return 0;
     }
 
+    // ------------------------------------------------------------------
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
         {
-            EnableWindow(s_pd->hParent, TRUE);
-            DestroyWindow(hWnd);
-        }
-        return 0;
-
-    case WM_KEYDOWN:
-        if (wParam == VK_ESCAPE || wParam == VK_RETURN)
-        {
-            EnableWindow(s_pd->hParent, TRUE);
+            if (s_pd) EnableWindow(s_pd->hParent, TRUE);
             DestroyWindow(hWnd);
         }
         return 0;
 
     case WM_CLOSE:
-        EnableWindow(s_pd->hParent, TRUE);
+        if (s_pd) EnableWindow(s_pd->hParent, TRUE);
         DestroyWindow(hWnd);
-        return 0;
-
-    case WM_DESTROY:
         return 0;
     }
     return DefWindowProcW(hWnd, msg, wParam, lParam);
@@ -3116,34 +3146,40 @@ void WireGuardTrayApp::_ShowAboutDialog()
     WCHAR wszVersion[64] = {};
     _GetDisplayVersion(wszVersion, ARRAYSIZE(wszVersion));
 
-    // Register window class (once)
-    WNDCLASSEXW wc = {};
-    wc.cbSize        = sizeof(wc);
-    wc.lpfnWndProc   = _AboutWndProc;
-    wc.hInstance     = _hInst;
-    wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
-    wc.lpszClassName = L"WGCPAboutDlg";
-    RegisterClassExW(&wc);  // benign if already registered
+    // Register window class (idempotent)
+    WNDCLASSEXW wc    = {};
+    wc.cbSize         = sizeof(wc);
+    wc.lpfnWndProc    = _AboutWndProc;
+    wc.hInstance      = _hInst;
+    wc.hCursor        = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground  = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    wc.lpszClassName  = L"WGCPAboutDlg";
+    RegisterClassExW(&wc);
 
-    const int W = 420, H = 260;
+    // Fixed dialog size (non-resizable)
+    const int W = 420, H = 262;
+    RECT rcAdj = { 0, 0, W, H };
+    AdjustWindowRectEx(&rcAdj, WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU, FALSE, WS_EX_DLGMODALFRAME);
+    int wW = rcAdj.right  - rcAdj.left;
+    int wH = rcAdj.bottom - rcAdj.top;
     int scW = GetSystemMetrics(SM_CXSCREEN);
     int scH = GetSystemMetrics(SM_CYSCREEN);
 
-    AboutDlgData dlgData = { wszVersion, WGCP_GITHUB_URL, _hWnd };
+    AboutDlgData dlgData = { wszVersion, WGCP_GITHUB_URL, _hWnd, _hInst };
 
     EnableWindow(_hWnd, FALSE);
     HWND hAbout = CreateWindowExW(
         WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
         L"WGCPAboutDlg",
-        T(L"WireGuard Credential Provider \u2013 Informationen",
-          L"WireGuard Credential Provider \u2013 About"),
+        T(L"WireGuard Credential Provider – Informationen",
+          L"WireGuard Credential Provider – About"),
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-        (scW - W) / 2, (scH - H) / 2, W, H,
+        (scW - wW) / 2, (scH - wH) / 2, wW, wH,
         _hWnd, nullptr, _hInst, &dlgData);
 
     if (!hAbout) { EnableWindow(_hWnd, TRUE); return; }
     ShowWindow(hAbout, SW_SHOW);
+    UpdateWindow(hAbout);
 
     // Modal message loop
     MSG m = {};
@@ -3157,6 +3193,7 @@ void WireGuardTrayApp::_ShowAboutDialog()
     if (m.message == WM_QUIT)
         PostQuitMessage(static_cast<int>(m.wParam));
 }
+
 
 void WireGuardTrayApp::_StartUpdateCheckThread()
 {

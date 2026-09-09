@@ -1,4 +1,4 @@
-//
+﻿//
 // main.cpp  –  Entry point for WireGuardCPTray.exe
 // Part of the WireGuard Credential Provider project.
 //
@@ -70,7 +70,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         FreeLibrary(hUxTheme);
     }
 
-    INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_WIN95_CLASSES };
+    INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_WIN95_CLASSES | ICC_LINK_CLASS };
     InitCommonControlsEx(&icc);
 
     WireGuardTrayApp* pApp = new(std::nothrow) WireGuardTrayApp();
