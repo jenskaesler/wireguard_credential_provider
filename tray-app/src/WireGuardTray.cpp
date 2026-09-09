@@ -2966,13 +2966,15 @@ void WireGuardTrayApp::_OpenYubiKeyManager()
 // ---------------------------------------------------------------------------
 static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
 {
-    // 1) Installer registry
+    // 1) Main app registry key (written by installer as "Version" = VERSION_DISP)
+    //    Prefer this over the Uninstall key: the Uninstall GUID changes between
+    //    installs but WGCP_REG_KEY is stable.
     HKEY hKey = nullptr;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, WGCP_REG_UNINSTALL, 0,
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, WGCP_REG_KEY, 0,
                       KEY_READ, &hKey) == ERROR_SUCCESS)
     {
         DWORD cbData = (DWORD)(cchBuf * sizeof(WCHAR));
-        LONG lRet = RegQueryValueExW(hKey, L"DisplayVersion", nullptr, nullptr,
+        LONG lRet = RegQueryValueExW(hKey, L"Version", nullptr, nullptr,
                                      (LPBYTE)pwszBuf, &cbData);
         RegCloseKey(hKey);
         if (lRet == ERROR_SUCCESS && pwszBuf[0] != L'\0')
@@ -3057,10 +3059,14 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
                                        CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
         s_hbrDialog = GetSysColorBrush(COLOR_BTNFACE);
 
-        const int PAD = 16;
-        const int X0  = PAD;
+        // Layout constants – all y values are client-area offsets
+        // Header strip: y=0..56 (painted in WM_PAINT)
+        // Body starts at y=66
+        const int PAD  = 16;
+        const int X0   = PAD;
+        const int W_CT = 388;  // content width (420 - 2*PAD)
 
-        // -- Icon (SS_ICON, 32x32 at y=68) --
+        // -- Icon (32x32, y=68) --
         HWND hIco = CreateWindowExW(0, L"STATIC", L"",
             WS_CHILD|WS_VISIBLE|SS_ICON|SS_CENTERIMAGE,
             X0, 68, 32, 32, hWnd,
@@ -3070,61 +3076,67 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
             IMAGE_ICON, 32, 32, LR_SHARED));
         SendMessageW(hIco, STM_SETICON, reinterpret_cast<WPARAM>(hIcon), 0);
 
-        // -- Version (bold, x=60, y=72) --
+        // -- Version (bold, beside icon) --
         WCHAR wszVer[128] = {};
         StringCchPrintfW(wszVer, ARRAYSIZE(wszVer), L"Version %s", s_pd->ver);
         HWND hVer = CreateWindowExW(0, L"STATIC", wszVer,
             WS_CHILD|WS_VISIBLE|SS_LEFT,
-            60, 72, 330, 20, hWnd,
+            60, 70, 330, 20, hWnd,
             reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_VER)),
             s_pd->hInst, nullptr);
         SendMessageW(hVer, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hBold), TRUE);
 
-        // -- Copyright (normal, x=60, y=94) --
-        HWND hCpy = CreateWindowExW(0, L"STATIC", L"© 2026 Jens Kaesler",
+        // -- Copyright --
+        HWND hCpy = CreateWindowExW(0, L"STATIC", L"\u00A9 2026 Jens Kaesler",
             WS_CHILD|WS_VISIBLE|SS_LEFT,
-            60, 96, 330, 18, hWnd,
+            60, 92, 330, 18, hWnd,
             reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_CPY)),
             s_pd->hInst, nullptr);
         SendMessageW(hCpy, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
 
-        // -- Description (2 lines, y=124) --
+        // -- Separator line (thin, y=120) --
+        CreateWindowExW(0, L"STATIC", L"",
+            WS_CHILD|WS_VISIBLE|SS_ETCHEDHORZ,
+            X0, 122, W_CT, 1, hWnd,
+            reinterpret_cast<HMENU>(6), s_pd->hInst, nullptr);
+
+        // -- Description (y=132) --
         PCWSTR pwszDesc = T(
-            L"WireGuard-Anmeldeanbieter für Windows-Domänen\r\n"
-            L"mit YubiKey / Smartcard-Unterstützung.",
+            L"WireGuard-Anmeldeanbieter f\u00FCr Windows-Dom\u00E4nen\r\n"
+            L"mit YubiKey / Smartcard-Unterst\u00FCtzung.",
             L"WireGuard credential provider for Windows domains\r\n"
             L"with YubiKey / smartcard support.");
         HWND hDesc = CreateWindowExW(0, L"STATIC", pwszDesc,
             WS_CHILD|WS_VISIBLE|SS_LEFT,
-            X0, 124, 388, 38, hWnd,
+            X0, 132, W_CT, 36, hWnd,
             reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_DESC)),
             s_pd->hInst, nullptr);
         SendMessageW(hDesc, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
 
-        // -- GitHub SysLink (y=170) --
+        // -- GitHub SysLink (y=180) --
         WCHAR wszLink[512] = {};
         StringCchPrintfW(wszLink, ARRAYSIZE(wszLink),
-            L"<a href=\"%s\">github.com/jenskaesler/wireguard_credential_provider</a>",
+            L"<a href=\"%s\">&#x1F517; github.com/jenskaesler/wireguard_credential_provider</a>",
             s_pd->url);
         HWND hLink = CreateWindowExW(0, WC_LINK, wszLink,
-            WS_CHILD|WS_VISIBLE|WS_TABSTOP|LWS_NOPREFIX,
-            X0, 170, 388, 22, hWnd,
+            WS_CHILD|WS_VISIBLE|WS_TABSTOP,
+            X0, 180, W_CT, 24, hWnd,
             reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_LINK)),
             s_pd->hInst, nullptr);
         SendMessageW(hLink, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
 
-        // -- Separator STATIC (SS_ETCHEDHORZ, y=212) --
+        // -- Bottom separator (y=222) --
         CreateWindowExW(0, L"STATIC", L"",
             WS_CHILD|WS_VISIBLE|SS_ETCHEDHORZ,
-            0, 212, 420, 2, hWnd,
+            0, 222, 420, 2, hWnd,
             reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_SEP)),
             s_pd->hInst, nullptr);
 
-        // -- OK button (centered, y=222) --
+        // -- OK button (centered, y=232) --
         HWND hOK = CreateWindowExW(0, L"BUTTON",
             T(L"OK", L"OK"),
             WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,
-            165, 222, 90, 28, hWnd,
+            165, 232, 90, 28, hWnd,
             reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDOK)),
             s_pd->hInst, nullptr);
         SendMessageW(hOK, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
@@ -3231,7 +3243,7 @@ void WireGuardTrayApp::_ShowAboutDialog()
     RegisterClassExW(&wc);
 
     // Fixed dialog size (non-resizable)
-    const int W = 420, H = 262;
+    const int W = 420, H = 272;
     RECT rcAdj = { 0, 0, W, H };
     AdjustWindowRectEx(&rcAdj, WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU, FALSE, WS_EX_DLGMODALFRAME);
     int wW = rcAdj.right  - rcAdj.left;
