@@ -7,6 +7,26 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.9.1] – 2026-09-09
+
+### Changed
+
+- **Systray: About-Dialog vereinfacht** — komplexer Win32-Dialog durch zwei standard
+  `MessageBox`-Fenster ersetzt: Infobox mit Version, Copyright, Beschreibung und GitHub-URL
+  als Text, gefolgt von einer Rückfrage „GitHub-Repository im Browser öffnen?"
+
+### Fixed
+
+- **Systray: Menü-Icon-Abstände vereinheitlicht** — alle Einträge nun einheitlich
+  `Icon + 2 Leerzeichen + Text`; `❌ Beenden` und `🔑 Yubico Authenticator öffnen…`
+  hatten abweichende Abstände
+- **Konstruktor: Member-Initialisierung** — `_bAutoUpdateCheck`, `_bUpdateBalloonActive`,
+  `_hUpdateThread`, `_hUpdateStop` wurden versehentlich im YubiKey-not-detected-Zweig
+  von `_ShowContextMenu` initialisiert statt im Konstruktor (führte zu Thread-Leak und
+  zurückgesetztem Update-Status bei jedem Menüöffnen ohne YubiKey)
+
+---
+
 ## [2026.8.6] – 2026-09-09
 
 ### Added
