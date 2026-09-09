@@ -547,7 +547,12 @@ void WireGuardTrayApp::_ShowContextMenu()
 
         AppendMenuW(hSub, MF_SEPARATOR, 0, nullptr);
 
-        // --- Submenu-Eintrag: Loeschen (nur gesperrt wenn gerade verbunden) ---
+                // --- Submenu-Eintrag: Bearbeiten ---
+        AppendMenuW(hSub, MF_STRING,
+            static_cast<UINT_PTR>(IDM_PROFILE_EDIT_BASE + i),
+            T(L"\u270F  Bearbeiten...", L"\u270F  Edit..."));
+
+// --- Submenu-Eintrag: Loeschen (nur gesperrt wenn gerade verbunden) ---
         UINT uDelFlags = MF_STRING;
         if (bIsConnected) uDelFlags |= MF_GRAYED;  // erst trennen, dann loeschen
         AppendMenuW(hSub, uDelFlags,
