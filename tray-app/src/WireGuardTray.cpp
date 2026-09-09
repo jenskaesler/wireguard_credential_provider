@@ -2365,16 +2365,18 @@ void WireGuardTrayApp::_EditProfile(int profileIndex)
     }
     CloseHandle(hFile);
 
-    // --- DPAPI decrypt under SYSTEM context ---
-    // WireGuard encrypts without CRYPTPROTECT_LOCAL_MACHINE (SYSTEM user scope).
-    // We must impersonate SYSTEM to decrypt.
+    // --- DPAPI decrypt ---
+    // WireGuard uses CryptProtectData(CRYPTPROTECT_LOCAL_MACHINE|CRYPTPROTECT_UI_FORBIDDEN)
+    // so the blob is machine-scoped: any Administrator can decrypt without impersonation.
+    // NOTE: CryptUnprotectData does NOT accept CRYPTPROTECT_LOCAL_MACHINE as a flag
+    //       (MSDN: only CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_VERIFY_PROTECTION).
+    //       Passing it caused the original NTE_BAD_FLAGS (0x8009000B) error.
     DATA_BLOB blobIn  = { dwRead, pbEncrypted };
     DATA_BLOB blobOut = { 0, nullptr };
-    bool bImpersonated = _ImpersonateAsSystem();
     BOOL bDecOk = CryptUnprotectData(&blobIn, nullptr, nullptr,
-                                      nullptr, nullptr, 0, &blobOut);
+                                      nullptr, nullptr,
+                                      CRYPTPROTECT_UI_FORBIDDEN, &blobOut);
     DWORD dwDecErr = GetLastError();
-    if (bImpersonated) RevertToSelf();
     delete[] pbEncrypted;
     if (!bDecOk)
     {
@@ -2628,15 +2630,17 @@ void WireGuardTrayApp::_EditProfile(int profileIndex)
     delete[] dlgData.pwszResult;
     cbUtf8--;  // exclude null terminator from encryption
 
-    // --- DPAPI re-encrypt under SYSTEM context (same scope WireGuard used) ---
+    // --- DPAPI re-encrypt ---
+    // Use the same flags WireGuard Manager uses: CRYPTPROTECT_LOCAL_MACHINE so
+    // the WireGuard tunnel service (LocalSystem) can decrypt on this machine.
     DATA_BLOB blobPlain  = { static_cast<DWORD>(cbUtf8),
                              reinterpret_cast<BYTE*>(pUtf8) };
     DATA_BLOB blobCipher = { 0, nullptr };
-    bImpersonated = _ImpersonateAsSystem();
     BOOL bEncOk = CryptProtectData(&blobPlain, nullptr, nullptr,
-                                    nullptr, nullptr, 0, &blobCipher);
+                                    nullptr, nullptr,
+                                    CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN,
+                                    &blobCipher);
     DWORD dwEncErr = GetLastError();
-    if (bImpersonated) RevertToSelf();
     delete[] pUtf8;
     if (!bEncOk)
     {
