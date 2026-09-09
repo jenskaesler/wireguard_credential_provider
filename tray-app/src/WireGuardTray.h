@@ -43,6 +43,7 @@
 #include <tlhelp32.h>   // CreateToolhelp32Snapshot, PROCESSENTRY32W
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "version.lib")
 
 // ---------------------------------------------------------------------------
 // Pull in all shared helpers from the CP DLL.

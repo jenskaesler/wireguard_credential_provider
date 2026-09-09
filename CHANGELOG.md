@@ -7,6 +7,18 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.9.4] – 2026-09-10
+
+### Changed
+
+- **Systray: About-Dialog neu gestaltet** — ersetzt die zwei MessageBox-Aufrufe durch
+  ein eigenes Fenster mit dunkelblauem Header (#1A376E, Segoe UI Bold 13pt), Info-Icon,
+  Version/Copyright-Zeile und klickbarem GitHub-Link (WC_LINK SysLink-Control).
+  Die Version wird jetzt aus dem EXE-FileVersion-Resource ausgelesen wenn kein
+  Installer-Registry-Eintrag vorhanden ist (kein (unbekannt) mehr im Dev-Build).
+
+---
+
 ## [2026.9.3] – 2026-09-09
 
 ### Added

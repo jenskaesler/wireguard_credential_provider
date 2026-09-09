@@ -2881,77 +2881,282 @@ void WireGuardTrayApp::_OpenYubiKeyManager()
 // ---------------------------------------------------------------------------
 // _GetDisplayVersion – Version aus Windows-Uninstall-Key lesen
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// _GetDisplayVersion
+// Priority: 1) Installer registry (DisplayVersion)
+//           2) EXE file version resource (FILEVERSION)
+// ---------------------------------------------------------------------------
 static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
 {
+    // 1) Installer registry
     HKEY hKey = nullptr;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, WGCP_REG_UNINSTALL, 0,
                       KEY_READ, &hKey) == ERROR_SUCCESS)
     {
         DWORD cbData = (DWORD)(cchBuf * sizeof(WCHAR));
-        if (RegQueryValueExW(hKey, L"DisplayVersion", nullptr, nullptr,
-                             (LPBYTE)pwszBuf, &cbData) != ERROR_SUCCESS)
-            StringCchCopyW(pwszBuf, cchBuf, WGCP_VERSION_FALLBACK);
+        LONG lRet = RegQueryValueExW(hKey, L"DisplayVersion", nullptr, nullptr,
+                                     (LPBYTE)pwszBuf, &cbData);
         RegCloseKey(hKey);
+        if (lRet == ERROR_SUCCESS && pwszBuf[0] != L'\0')
+            return;
     }
-    else
+
+    // 2) EXE file version
+    WCHAR wszExe[MAX_PATH] = {};
+    if (GetModuleFileNameW(nullptr, wszExe, MAX_PATH) > 0)
     {
-        StringCchCopyW(pwszBuf, cchBuf, WGCP_VERSION_FALLBACK);
+        DWORD dwDummy = 0;
+        DWORD dwSize  = GetFileVersionInfoSizeW(wszExe, &dwDummy);
+        if (dwSize > 0)
+        {
+            BYTE* pVerData = new(std::nothrow) BYTE[dwSize];
+            if (pVerData && GetFileVersionInfoW(wszExe, 0, dwSize, pVerData))
+            {
+                VS_FIXEDFILEINFO* pFI = nullptr;
+                UINT uLen = 0;
+                if (VerQueryValueW(pVerData, L"\\",
+                                   reinterpret_cast<LPVOID*>(&pFI), &uLen) && pFI)
+                {
+                    StringCchPrintfW(pwszBuf, cchBuf, L"%u.%u.%u",
+                        HIWORD(pFI->dwProductVersionMS),
+                        LOWORD(pFI->dwProductVersionMS),
+                        HIWORD(pFI->dwProductVersionLS));
+                    delete[] pVerData;
+                    return;
+                }
+            }
+            delete[] pVerData;
+        }
     }
+
+    StringCchCopyW(pwszBuf, cchBuf, WGCP_VERSION_FALLBACK);
 }
 
 // ---------------------------------------------------------------------------
-// _ShowAboutDialog – Informationen als MessageBox
+// _ShowAboutDialog – eigener Dialog mit Header, Links und Version
 // ---------------------------------------------------------------------------
+
+// Daten fuer den About-Dialog
+struct AboutDlgData
+{
+    PCWSTR pwszVersion;
+    PCWSTR pwszGitHubUrl;
+    HWND   hParent;
+};
+
+// WndProc des About-Fensters (statische Lambda-freie Funktion)
+static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    static AboutDlgData* s_pd = nullptr;
+
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        s_pd = reinterpret_cast<AboutDlgData*>(cs->lpCreateParams);
+
+        // ---- Layout constants (dialog units approximated) ----
+        const int PAD   = 14;
+        const int HDR_H = 52;
+        const int W     = 420;
+        const int H     = 260;
+        const int BTN_W = 88;
+        const int BTN_H = 28;
+
+        // ---- Icon (standard info icon, 32x32) ----
+        HICON hIcon = LoadIconW(nullptr, IDI_INFORMATION);
+        CreateWindowExW(0, L"STATIC", L"",
+            WS_CHILD | WS_VISIBLE | SS_ICON | SS_CENTERIMAGE,
+            PAD, HDR_H + PAD, 32, 32,
+            hWnd, reinterpret_cast<HMENU>(1), nullptr, nullptr);
+        SendDlgItemMessageW(hWnd, 1, STM_SETICON,
+                            reinterpret_cast<WPARAM>(hIcon), 0);
+
+        // ---- Version label ----
+        WCHAR wszVerLine[128] = {};
+        StringCchPrintfW(wszVerLine, ARRAYSIZE(wszVerLine),
+            T(L"Version %s  \u2013  \u00A9 2026 Jens Kaesler",
+              L"Version %s  \u2013  \u00A9 2026 Jens Kaesler"),
+            s_pd->pwszVersion);
+        CreateWindowExW(0, L"STATIC", wszVerLine,
+            WS_CHILD | WS_VISIBLE | SS_LEFT,
+            PAD + 32 + PAD, HDR_H + PAD + 4, W - PAD*3 - 32, 20,
+            hWnd, reinterpret_cast<HMENU>(2), nullptr, nullptr);
+
+        // ---- Description ----
+        PCWSTR pwszDesc = T(
+            L"WireGuard-Anmeldeanbieter f\u00FCr Windows-Dom\u00E4nen\r\n"
+            L"mit YubiKey / Smartcard-Unterst\u00FCtzung.",
+            L"WireGuard credential provider for Windows domains\r\n"
+            L"with YubiKey / smartcard support.");
+        CreateWindowExW(0, L"STATIC", pwszDesc,
+            WS_CHILD | WS_VISIBLE | SS_LEFT,
+            PAD + 32 + PAD, HDR_H + PAD + 28, W - PAD*3 - 32, 40,
+            hWnd, reinterpret_cast<HMENU>(3), nullptr, nullptr);
+
+        // ---- GitHub SysLink ----
+        WCHAR wszLink[512] = {};
+        StringCchPrintfW(wszLink, ARRAYSIZE(wszLink),
+            L"<a href=\"%s\">github.com/jenskaesler/wireguard_credential_provider</a>",
+            s_pd->pwszGitHubUrl);
+        CreateWindowExW(0, WC_LINK, wszLink,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            PAD, HDR_H + PAD + 80, W - PAD*2, 20,
+            hWnd, reinterpret_cast<HMENU>(4), nullptr, nullptr);
+
+        // ---- Separator ----
+        CreateWindowExW(0, L"STATIC", L"",
+            WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+            0, H - BTN_H - PAD*2 - 2, W, 2,
+            hWnd, reinterpret_cast<HMENU>(5), nullptr, nullptr);
+
+        // ---- OK button ----
+        CreateWindowExW(0, L"BUTTON",
+            T(L"OK", L"OK"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+            (W - BTN_W) / 2, H - BTN_H - PAD, BTN_W, BTN_H,
+            hWnd, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+
+        return 0;
+    }
+
+    case WM_CTLCOLORSTATIC:
+    {
+        // Paint static controls in the header zone (top 52 px client) with white text
+        HWND hCtrl = reinterpret_cast<HWND>(lParam);
+        RECT rcCtrl;
+        GetWindowRect(hCtrl, &rcCtrl);
+        POINT ptTopLeft = { rcCtrl.left, rcCtrl.top };
+        ScreenToClient(hWnd, &ptTopLeft);
+        if (ptTopLeft.y < 52)
+        {
+            SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
+            SetTextColor(reinterpret_cast<HDC>(wParam), RGB(0xFF, 0xFF, 0xFF));
+            return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
+        }
+        return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
+    }
+
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        RECT rcClient;
+        GetClientRect(hWnd, &rcClient);
+
+        // Dark blue header strip
+        RECT rcHeader = { 0, 0, rcClient.right, 52 };
+        HBRUSH hbrHdr = CreateSolidBrush(RGB(0x1a, 0x37, 0x6e));
+        FillRect(hdc, &rcHeader, hbrHdr);
+        DeleteObject(hbrHdr);
+
+        // App title in header
+        HFONT hFontTitle = CreateFontW(
+            -MulDiv(13, GetDeviceCaps(hdc, LOGPIXELSY), 72),
+            0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HFONT hOldFont = static_cast<HFONT>(SelectObject(hdc, hFontTitle));
+
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(0xFF, 0xFF, 0xFF));
+        RECT rcTitle = { 14, 10, rcClient.right - 14, 52 };
+        DrawTextW(hdc, L"WireGuard Credential Provider", -1,
+                  &rcTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_WORD_ELLIPSIS);
+
+        SelectObject(hdc, hOldFont);
+        DeleteObject(hFontTitle);
+
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+
+    case WM_NOTIFY:
+    {
+        auto* pNMHdr = reinterpret_cast<NMHDR*>(lParam);
+        if (pNMHdr->idFrom == 4 && pNMHdr->code == NM_CLICK)
+        {
+            auto* pLink = reinterpret_cast<NMLINK*>(lParam);
+            ShellExecuteW(nullptr, L"open", pLink->item.szUrl,
+                          nullptr, nullptr, SW_SHOWNORMAL);
+        }
+        return 0;
+    }
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
+        {
+            EnableWindow(s_pd->hParent, TRUE);
+            DestroyWindow(hWnd);
+        }
+        return 0;
+
+    case WM_KEYDOWN:
+        if (wParam == VK_ESCAPE || wParam == VK_RETURN)
+        {
+            EnableWindow(s_pd->hParent, TRUE);
+            DestroyWindow(hWnd);
+        }
+        return 0;
+
+    case WM_CLOSE:
+        EnableWindow(s_pd->hParent, TRUE);
+        DestroyWindow(hWnd);
+        return 0;
+
+    case WM_DESTROY:
+        return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
 void WireGuardTrayApp::_ShowAboutDialog()
 {
     WCHAR wszVersion[64] = {};
     _GetDisplayVersion(wszVersion, ARRAYSIZE(wszVersion));
 
-    WCHAR wszMsg[512] = {};
-    StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
-        T(
-            L"Version:    %s\r\n"
-            L"\u00A9 2026 Jens Kaesler\r\n"
-            L"\r\n"
-            L"WireGuard-Anmeldeanbieter f\u00FCr Windows-Dom\u00E4nen\r\n"
-            L"mit YubiKey / Smartcard-Unterst\u00FCtzung.\r\n"
-            L"\r\n"
-            L"github.com/jenskaesler/wireguard_credential_provider",
-            L"Version:    %s\r\n"
-            L"\u00A9 2026 Jens Kaesler\r\n"
-            L"\r\n"
-            L"WireGuard credential provider for Windows domains\r\n"
-            L"with YubiKey / smartcard support.\r\n"
-            L"\r\n"
-            L"github.com/jenskaesler/wireguard_credential_provider"
-        ),
-        wszVersion);
+    // Register window class (once)
+    WNDCLASSEXW wc = {};
+    wc.cbSize        = sizeof(wc);
+    wc.lpfnWndProc   = _AboutWndProc;
+    wc.hInstance     = _hInst;
+    wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    wc.lpszClassName = L"WGCPAboutDlg";
+    RegisterClassExW(&wc);  // benign if already registered
 
-    MessageBoxW(_hWnd, wszMsg,
+    const int W = 420, H = 260;
+    int scW = GetSystemMetrics(SM_CXSCREEN);
+    int scH = GetSystemMetrics(SM_CYSCREEN);
+
+    AboutDlgData dlgData = { wszVersion, WGCP_GITHUB_URL, _hWnd };
+
+    EnableWindow(_hWnd, FALSE);
+    HWND hAbout = CreateWindowExW(
+        WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
+        L"WGCPAboutDlg",
         T(L"WireGuard Credential Provider \u2013 Informationen",
           L"WireGuard Credential Provider \u2013 About"),
-        MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+        (scW - W) / 2, (scH - H) / 2, W, H,
+        _hWnd, nullptr, _hInst, &dlgData);
 
-    int nOpen = MessageBoxW(_hWnd,
-        T(L"GitHub-Repository im Browser \u00F6ffnen?",
-          L"Open GitHub repository in browser?"),
-        T(L"GitHub", L"GitHub"),
-        MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND);
-    if (nOpen == IDYES)
-        ShellExecuteW(nullptr, L"open", WGCP_GITHUB_URL, nullptr, nullptr, SW_SHOWNORMAL);
+    if (!hAbout) { EnableWindow(_hWnd, TRUE); return; }
+    ShowWindow(hAbout, SW_SHOW);
+
+    // Modal message loop
+    MSG m = {};
+    while (IsWindow(hAbout) && GetMessageW(&m, nullptr, 0, 0) > 0)
+    {
+        if (!IsWindow(hAbout)) break;
+        if (IsDialogMessageW(hAbout, &m)) continue;
+        TranslateMessage(&m);
+        DispatchMessageW(&m);
+    }
+    if (m.message == WM_QUIT)
+        PostQuitMessage(static_cast<int>(m.wParam));
 }
-
-
-// Update-Prüfung: _StartUpdateCheckThread / _StopUpdateCheckThread / _UpdateCheckThread
-//
-// Ablauf:
-//  1. Wartet 10 Minuten (oder bis _hUpdateStop signalisiert wird)
-//  2. Ruft GitHub-API ab:
-//     GET https://api.github.com/repos/jenskaesler/wireguard_credential_provider/releases/latest
-//  3. Extrahiert "tag_name" aus der JSON-Antwort
-//  4. Vergleicht mit installierter Version (aus WGCP_REG_UNINSTALL\DisplayVersion)
-//  5. Wenn neuer: Balloon-Tip mit Link zur Release-Seite
-// ---------------------------------------------------------------------------
 
 void WireGuardTrayApp::_StartUpdateCheckThread()
 {
