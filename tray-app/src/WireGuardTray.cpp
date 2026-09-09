@@ -612,6 +612,8 @@ void WireGuardTrayApp::_ShowContextMenu()
         T(L"\U0001F4C1  Konfigurationsordner \u00F6ffnen...",
           L"\U0001F4C1  Open config folder..."));
 
+    AppendMenuW(hMenu, MF_STRING, IDM_ABOUT,
+        T(L"\u2139 Informationen...", L"\u2139 About..."));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, IDM_EXIT,
         T(L"Beenden", L"Exit"));
