@@ -77,6 +77,7 @@
 #define IDM_PROFILE_CONNECT_BASE 600
 #define IDM_PROFILE_SELECT_BASE  700
 #define IDM_PROFILE_SWITCH_BASE  800
+#define IDM_PROFILE_EDIT_BASE    900
 #define IDM_IMPORT          401
 #define IDM_OPEN_CONFIG_DIR 402
 #define IDM_DELETE_PROFILE  403
@@ -91,6 +92,7 @@
 // PIN dialog control IDs (programmatic dialog – no .rc dialog template needed)
 #define IDC_PIN_EDIT        502
 #define IDC_SC_STATUS       505
+#define IDC_WGEDIT_TEXT     510
 
 // ---------------------------------------------------------------------------
 // WireGuardTrayApp
@@ -152,6 +154,7 @@ private:
     void _ImportProfile();
     void _DeleteProfile();
     void _DeleteProfileAt(int profileIndex);
+    void _EditProfile(int profileIndex);
     void _OpenYubiKeyManager();
     WCHAR _wszYkMgrPath[MAX_PATH];  // path found during menu build
     void _OpenConfigDir();

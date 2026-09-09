@@ -1213,6 +1213,13 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
         if (uCmd == IDM_DISCONNECT)     { _Disconnect();               return 0; }
         if (uCmd == IDM_IMPORT)         { _ImportProfile();            return 0; }
         if (uCmd == IDM_DELETE_PROFILE) { _DeleteProfile();            return 0; } // legacy fallback
+        if (uCmd >= IDM_PROFILE_EDIT_BASE &&
+            uCmd <  static_cast<UINT>(IDM_PROFILE_EDIT_BASE + _nProfiles))
+        {
+            int iEdit = static_cast<int>(uCmd - IDM_PROFILE_EDIT_BASE);
+            _EditProfile(iEdit);
+            return 0;
+        }
         if (uCmd >= IDM_PROFILE_DELETE_BASE &&
             uCmd <  static_cast<UINT>(IDM_PROFILE_DELETE_BASE + _nProfiles))
         {
@@ -2163,6 +2170,459 @@ DWORD WINAPI WireGuardTrayApp::_NetworkWatchThread(LPVOID lpParam)
 // _DeleteProfileAt – delete the profile at the given index after confirmation.
 // Called from the submenu "Delete" entry (IDM_PROFILE_DELETE_BASE + i).
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// _EditProfile  –  Decrypt, edit and re-encrypt a WireGuard profile
+// ---------------------------------------------------------------------------
+// The .conf.dpapi file is a standard Windows DPAPI blob encrypted with
+// CRYPTPROTECT_LOCAL_MACHINE by the WireGuardManager (SYSTEM) service.
+// Running as Administrator we can decrypt and re-encrypt on the same machine.
+// ---------------------------------------------------------------------------
+
+// Dialog proc for the profile editor (file-scope, before _EditProfile)
+struct WGEditDlgData
+{
+    WireGuardTrayApp* pApp;
+    WCHAR  wszProfileName[MAX_PATH_WGCP];
+    WCHAR* pwszConf;     // plaintext config buffer (caller allocates, dialog reads)
+    WCHAR* pwszResult;   // edited result (dialog allocates with new[], caller frees)
+    bool   bSaved;
+};
+
+static INT_PTR CALLBACK _EditDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    static WGEditDlgData* s_pData = nullptr;
+
+    switch (msg)
+    {
+    case WM_INITDIALOG:
+    {
+        s_pData = reinterpret_cast<WGEditDlgData*>(lParam);
+
+        // Title
+        WCHAR wszTitle[MAX_PATH_WGCP + 64] = {};
+        StringCchPrintfW(wszTitle, ARRAYSIZE(wszTitle),
+            T(L"Profil bearbeiten \u2013 %s", L"Edit profile \u2013 %s"),
+            s_pData->wszProfileName);
+        SetWindowTextW(hDlg, wszTitle);
+
+        // Populate the edit control
+        HWND hEdit = GetDlgItem(hDlg, IDC_WGEDIT_TEXT);
+        if (hEdit && s_pData->pwszConf)
+            SetWindowTextW(hEdit, s_pData->pwszConf);
+
+        // Set monospace font
+        HFONT hFont = CreateFontW(
+            -MulDiv(10, GetDeviceCaps(GetDC(nullptr), LOGPIXELSY), 72),
+            0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
+            L"Consolas");
+        if (hFont && hEdit)
+            SendMessageW(hEdit, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
+
+        return TRUE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK && s_pData)
+        {
+            HWND hEdit = GetDlgItem(hDlg, IDC_WGEDIT_TEXT);
+            if (hEdit)
+            {
+                int cch = GetWindowTextLengthW(hEdit) + 1;
+                s_pData->pwszResult = new(std::nothrow) WCHAR[cch];
+                if (s_pData->pwszResult)
+                {
+                    GetWindowTextW(hEdit, s_pData->pwszResult, cch);
+                    s_pData->bSaved = true;
+                }
+            }
+            EndDialog(hDlg, IDOK);
+            return TRUE;
+        }
+        if (LOWORD(wParam) == IDCANCEL)
+        {
+            s_pData->bSaved = false;
+            EndDialog(hDlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    case WM_CLOSE:
+        if (s_pData) s_pData->bSaved = false;
+        EndDialog(hDlg, IDCANCEL);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+void WireGuardTrayApp::_EditProfile(int profileIndex)
+{
+    if (profileIndex < 0 || profileIndex >= _nProfiles) return;
+
+    PCWSTR pwszProfile = _rgProfiles[profileIndex];
+
+    // Build full path to .conf.dpapi
+    WCHAR wszConfigDir[MAX_PATH_WGCP] = {};
+    WGGetConfigDir(wszConfigDir, MAX_PATH_WGCP);
+    WCHAR wszDpapiPath[MAX_PATH_WGCP] = {};
+    StringCchPrintfW(wszDpapiPath, MAX_PATH_WGCP, L"%s%s%s",
+                     wszConfigDir, pwszProfile, WG_CONFIG_EXT);
+
+    // --- Read the .conf.dpapi file ---
+    HANDLE hFile = CreateFileW(wszDpapiPath, GENERIC_READ, FILE_SHARE_READ,
+                               nullptr, OPEN_EXISTING, 0, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        MessageBoxW(_hWnd,
+            T(L"Konfigurationsdatei konnte nicht ge\u00F6ffnet werden.",
+              L"Configuration file could not be opened."),
+            T(L"Fehler", L"Error"), MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
+        return;
+    }
+
+    DWORD dwFileSize = GetFileSize(hFile, nullptr);
+    BYTE* pbEncrypted = new(std::nothrow) BYTE[dwFileSize];
+    if (!pbEncrypted) { CloseHandle(hFile); return; }
+
+    DWORD dwRead = 0;
+    if (!ReadFile(hFile, pbEncrypted, dwFileSize, &dwRead, nullptr) || dwRead != dwFileSize)
+    {
+        delete[] pbEncrypted;
+        CloseHandle(hFile);
+        MessageBoxW(_hWnd,
+            T(L"Konfigurationsdatei konnte nicht gelesen werden.",
+              L"Configuration file could not be read."),
+            T(L"Fehler", L"Error"), MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
+        return;
+    }
+    CloseHandle(hFile);
+
+    // --- DPAPI decrypt (LOCAL_MACHINE scope) ---
+    DATA_BLOB blobIn  = { dwRead, pbEncrypted };
+    DATA_BLOB blobOut = { 0, nullptr };
+    if (!CryptUnprotectData(&blobIn, nullptr, nullptr, nullptr, nullptr,
+                             CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN,
+                             &blobOut))
+    {
+        delete[] pbEncrypted;
+        WCHAR wszErr[128] = {};
+        StringCchPrintfW(wszErr, ARRAYSIZE(wszErr),
+            T(L"Entschl\u00FCsselung fehlgeschlagen (Fehler %lu).",
+              L"Decryption failed (error %lu)."),
+            GetLastError());
+        MessageBoxW(_hWnd, wszErr, T(L"Fehler", L"Error"),
+                    MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
+        return;
+    }
+    delete[] pbEncrypted;
+
+    // Convert decrypted bytes (UTF-8) to wide string for the editor
+    int cchWide = MultiByteToWideChar(CP_UTF8, 0,
+                                      reinterpret_cast<LPCSTR>(blobOut.pbData),
+                                      static_cast<int>(blobOut.cbData),
+                                      nullptr, 0);
+    WCHAR* pwszConf = new(std::nothrow) WCHAR[cchWide + 1];
+    if (!pwszConf) { LocalFree(blobOut.pbData); return; }
+    MultiByteToWideChar(CP_UTF8, 0,
+                        reinterpret_cast<LPCSTR>(blobOut.pbData),
+                        static_cast<int>(blobOut.cbData),
+                        pwszConf, cchWide);
+    pwszConf[cchWide] = L'\0';
+    LocalFree(blobOut.pbData);
+
+    // Normalise line endings to CRLF for the EDIT control.
+    // 1) Strip bare \r (collapse \r\n -> \n, leave bare \n as-is)
+    {
+        WCHAR* pSrc = pwszConf;
+        WCHAR* pDst = pwszConf;
+        while (*pSrc)
+        {
+            if (*pSrc == L'\r') { pSrc++; continue; }  // strip \r
+            *pDst++ = *pSrc++;
+        }
+        *pDst = L'\0';
+    }
+    // 2) Count \n to allocate new buffer with \r\n
+    int cchLF = 0;
+    for (WCHAR* p = pwszConf; *p; p++) if (*p == L'\n') cchLF++;
+    int cchSrc = static_cast<int>(wcslen(pwszConf));
+    WCHAR* pwszCRLF = new(std::nothrow) WCHAR[cchSrc + cchLF + 1];
+    if (pwszCRLF)
+    {
+        WCHAR* pSrc = pwszConf;
+        WCHAR* pDst = pwszCRLF;
+        while (*pSrc)
+        {
+            if (*pSrc == L'\n') { *pDst++ = L'\r'; }
+            *pDst++ = *pSrc++;
+        }
+        *pDst = L'\0';
+        delete[] pwszConf;
+        pwszConf = pwszCRLF;
+    }
+
+    // --- Show editor dialog (programmatic, no .rc template) ---
+    // Build dialog template in memory
+    // Layout: full-client multiline EDIT + OK/Cancel buttons at bottom
+    bool bWasConnected = (_bConnected && profileIndex == _nSelectedProfile);
+
+    if (bWasConnected)
+    {
+        int nWarn = MessageBoxW(_hWnd,
+            T(L"Das Profil ist gerade verbunden.\r\n"
+              L"Zum Bearbeiten muss die Verbindung getrennt werden.\r\n\r\n"
+              L"Jetzt trennen und Profil \u00F6ffnen?",
+              L"The profile is currently connected.\r\n"
+              L"The connection must be disconnected to edit.\r\n\r\n"
+              L"Disconnect now and open editor?"),
+            T(L"Profil bearbeiten", L"Edit profile"),
+            MB_ICONQUESTION | MB_YESNO | MB_SETFOREGROUND);
+        if (nWarn == IDNO) { delete[] pwszConf; return; }
+        _Disconnect();
+    }
+
+    WGEditDlgData dlgData = {};
+    dlgData.pApp    = this;
+    StringCchCopyW(dlgData.wszProfileName, MAX_PATH_WGCP, pwszProfile);
+    dlgData.pwszConf   = pwszConf;
+    dlgData.pwszResult = nullptr;
+    dlgData.bSaved     = false;
+
+    // Build in-memory DLGTEMPLATE (no .rc needed)
+    // Dialog: 500x380 DLU, resizable look, has IDC_WGEDIT_TEXT (edit) + OK + Cancel
+    struct alignas(DWORD) DlgTmpl {
+        DLGTEMPLATE hdr;
+        WORD menu, cls, title;
+    };
+
+    // Use CreateDialogIndirectParam approach: build template manually
+    // Simpler: use a plain window with CreateWindowEx
+    //
+    // We'll use DialogBoxIndirectParam with a hand-crafted template.
+    // Template memory layout:
+    //   DLGTEMPLATE  (18 bytes)
+    //   menu  (WORD = 0, no menu)
+    //   class (WORD = 0, default dialog class)
+    //   title (WCHAR[] null-terminated)
+    //   [items follow]
+    //
+    // But building the full item array is complex.
+    // Use a simpler approach: RegisterClass + CreateWindowEx (modal via EnableWindow).
+
+    WNDCLASSEXW wc = {};
+    wc.cbSize       = sizeof(wc);
+    wc.lpfnWndProc  = [](HWND hw, UINT m, WPARAM wp, LPARAM lp) -> LRESULT {
+        if (m == WM_NCCREATE) {
+            auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+            SetWindowLongPtrW(hw, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+            return DefWindowProcW(hw, m, wp, lp);
+        }
+        auto* pd = reinterpret_cast<WGEditDlgData*>(GetWindowLongPtrW(hw, GWLP_USERDATA));
+
+        if (m == WM_CREATE)
+        {
+            RECT rc; GetClientRect(hw, &rc);
+            int btnH = 30, btnW = 90, pad = 8;
+            int editH = rc.bottom - btnH - pad*3;
+
+            HWND hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_HSCROLL|
+                ES_MULTILINE|ES_AUTOVSCROLL|ES_AUTOHSCROLL|ES_WANTRETURN,
+                pad, pad, rc.right-pad*2, editH,
+                hw, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_WGEDIT_TEXT)), nullptr, nullptr);
+
+            HFONT hFont = CreateFontW(
+                -MulDiv(10, GetDeviceCaps(GetDC(nullptr), LOGPIXELSY), 72),
+                0,0,0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, FIXED_PITCH|FF_MODERN, L"Consolas");
+            if (hFont) SendMessageW(hEdit, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
+            if (pd && pd->pwszConf) SetWindowTextW(hEdit, pd->pwszConf);
+
+            int btnY = editH + pad*2;
+            int btnX = rc.right - (btnW+pad)*2;
+            CreateWindowExW(0, L"BUTTON",
+                T(L"Speichern", L"Save"),
+                WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON,
+                btnX, btnY, btnW, btnH,
+                hw, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDOK)), nullptr, nullptr);
+            CreateWindowExW(0, L"BUTTON",
+                T(L"Abbrechen", L"Cancel"),
+                WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
+                btnX+btnW+pad, btnY, btnW, btnH,
+                hw, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDCANCEL)), nullptr, nullptr);
+            return 0;
+        }
+        if (m == WM_SIZE)
+        {
+            int btnH = 30, btnW = 90, pad = 8;
+            int W = LOWORD(lp), H = HIWORD(lp);
+            int editH = H - btnH - pad*3;
+            HWND hEdit = GetDlgItem(hw, IDC_WGEDIT_TEXT);
+            if (hEdit) SetWindowPos(hEdit, nullptr, pad, pad, W-pad*2, editH, SWP_NOZORDER);
+            int btnY = editH + pad*2;
+            int btnX = W - (btnW+pad)*2;
+            HWND hOK  = GetDlgItem(hw, IDOK);
+            HWND hCan = GetDlgItem(hw, IDCANCEL);
+            if (hOK)  SetWindowPos(hOK,  nullptr, btnX, btnY, btnW, btnH, SWP_NOZORDER);
+            if (hCan) SetWindowPos(hCan, nullptr, btnX+btnW+pad, btnY, btnW, btnH, SWP_NOZORDER);
+            return 0;
+        }
+        if (m == WM_COMMAND)
+        {
+            WORD id = LOWORD(wp);
+            if (id == IDOK && pd)
+            {
+                HWND hEdit = GetDlgItem(hw, IDC_WGEDIT_TEXT);
+                if (hEdit) {
+                    int cch = GetWindowTextLengthW(hEdit) + 1;
+                    pd->pwszResult = new(std::nothrow) WCHAR[cch];
+                    if (pd->pwszResult) { GetWindowTextW(hEdit, pd->pwszResult, cch); pd->bSaved = true; }
+                }
+                EnableWindow(reinterpret_cast<HWND>(GetWindowLongPtrW(hw, GWLP_HWNDPARENT)), TRUE);
+                DestroyWindow(hw);
+            }
+            if (id == IDCANCEL)
+            {
+                EnableWindow(reinterpret_cast<HWND>(GetWindowLongPtrW(hw, GWLP_HWNDPARENT)), TRUE);
+                DestroyWindow(hw);
+            }
+            return 0;
+        }
+        if (m == WM_KEYDOWN && wp == VK_ESCAPE) {
+            EnableWindow(reinterpret_cast<HWND>(GetWindowLongPtrW(hw, GWLP_HWNDPARENT)), TRUE);
+            DestroyWindow(hw);
+            return 0;
+        }
+        if (m == WM_DESTROY) { return 0; }
+        return DefWindowProcW(hw, m, wp, lp);
+    };
+    wc.hInstance    = _hInst;
+    wc.hCursor      = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.lpszClassName = L"WGCPProfileEditor";
+    RegisterClassExW(&wc);  // may fail if already registered – that's fine
+
+    // Compute centered position
+    int dlgW = 640, dlgH = 480;
+    int scW  = GetSystemMetrics(SM_CXSCREEN);
+    int scH  = GetSystemMetrics(SM_CYSCREEN);
+    int posX = (scW - dlgW) / 2;
+    int posY = (scH - dlgH) / 2;
+
+    WCHAR wszEdTitle[MAX_PATH_WGCP + 64] = {};
+    StringCchPrintfW(wszEdTitle, ARRAYSIZE(wszEdTitle),
+        T(L"Profil bearbeiten \u2013 %s", L"Edit profile \u2013 %s"),
+        pwszProfile);
+
+    EnableWindow(_hWnd, FALSE);  // modal behaviour
+    HWND hEditor = CreateWindowExW(
+        WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
+        L"WGCPProfileEditor", wszEdTitle,
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        posX, posY, dlgW, dlgH,
+        _hWnd, nullptr, _hInst, &dlgData);
+
+    if (!hEditor) { EnableWindow(_hWnd, TRUE); delete[] pwszConf; return; }
+
+    // Modal message loop – runs until editor window is destroyed.
+    // Re-posts WM_QUIT if received so the main tray loop can exit cleanly.
+    MSG edMsg = {};
+    while (IsWindow(hEditor) && GetMessageW(&edMsg, nullptr, 0, 0) > 0)
+    {
+        if (!IsWindow(hEditor)) break;
+        if (IsDialogMessageW(hEditor, &edMsg)) continue;
+        TranslateMessage(&edMsg);
+        DispatchMessageW(&edMsg);
+    }
+    if (edMsg.message == WM_QUIT)
+        PostQuitMessage(static_cast<int>(edMsg.wParam));
+
+    delete[] pwszConf;
+
+    if (!dlgData.bSaved || !dlgData.pwszResult)
+    {
+        delete[] dlgData.pwszResult;
+        if (bWasConnected) _Connect(_nSelectedProfile);  // restore connection
+        return;
+    }
+
+    // --- Convert edited wide string back to UTF-8 (no BOM) ---
+    int cbUtf8 = WideCharToMultiByte(CP_UTF8, 0, dlgData.pwszResult, -1,
+                                     nullptr, 0, nullptr, nullptr);
+    char* pUtf8 = new(std::nothrow) char[cbUtf8];
+    if (!pUtf8) { delete[] dlgData.pwszResult; return; }
+    WideCharToMultiByte(CP_UTF8, 0, dlgData.pwszResult, -1, pUtf8, cbUtf8, nullptr, nullptr);
+    delete[] dlgData.pwszResult;
+    cbUtf8--;  // exclude null terminator from encryption
+
+    // --- DPAPI re-encrypt ---
+    DATA_BLOB blobPlain  = { static_cast<DWORD>(cbUtf8),
+                             reinterpret_cast<BYTE*>(pUtf8) };
+    DATA_BLOB blobCipher = { 0, nullptr };
+    if (!CryptProtectData(&blobPlain, nullptr, nullptr, nullptr, nullptr,
+                           CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN,
+                           &blobCipher))
+    {
+        delete[] pUtf8;
+        WCHAR wszErr[128] = {};
+        StringCchPrintfW(wszErr, ARRAYSIZE(wszErr),
+            T(L"Verschl\u00FCsselung fehlgeschlagen (Fehler %lu).",
+              L"Encryption failed (error %lu)."),
+            GetLastError());
+        MessageBoxW(_hWnd, wszErr, T(L"Fehler", L"Error"),
+                    MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
+        if (bWasConnected) _Connect(_nSelectedProfile);
+        return;
+    }
+    delete[] pUtf8;
+
+    // --- Write back to .conf.dpapi (atomic: write to temp, then MoveFileEx) ---
+    WCHAR wszTmpPath[MAX_PATH_WGCP] = {};
+    StringCchPrintfW(wszTmpPath, MAX_PATH_WGCP, L"%s.tmp", wszDpapiPath);
+
+    HANDLE hOut = CreateFileW(wszTmpPath, GENERIC_WRITE, 0, nullptr,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    bool bWriteOk = false;
+    if (hOut != INVALID_HANDLE_VALUE)
+    {
+        DWORD dwWritten = 0;
+        bWriteOk = WriteFile(hOut, blobCipher.pbData, blobCipher.cbData,
+                             &dwWritten, nullptr) && dwWritten == blobCipher.cbData;
+        CloseHandle(hOut);
+        if (bWriteOk)
+            bWriteOk = MoveFileExW(wszTmpPath, wszDpapiPath,
+                                   MOVEFILE_REPLACE_EXISTING) != FALSE;
+        if (!bWriteOk)
+            DeleteFileW(wszTmpPath);
+    }
+    LocalFree(blobCipher.pbData);
+
+    if (!bWriteOk)
+    {
+        MessageBoxW(_hWnd,
+            T(L"Die Konfigurationsdatei konnte nicht gespeichert werden.",
+              L"The configuration file could not be saved."),
+            T(L"Fehler", L"Error"), MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
+        if (bWasConnected) _Connect(_nSelectedProfile);
+        return;
+    }
+
+    MessageBoxW(_hWnd,
+        T(L"Profil erfolgreich gespeichert.", L"Profile saved successfully."),
+        T(L"WireGuard Credential Provider", L"WireGuard Credential Provider"),
+        MB_ICONINFORMATION | MB_OK | MB_SETFOREGROUND);
+
+    if (bWasConnected)
+    {
+        int nRecon = MessageBoxW(_hWnd,
+            T(L"Soll die VPN-Verbindung jetzt wiederhergestellt werden?",
+              L"Do you want to reconnect the VPN now?"),
+            T(L"Verbinden?", L"Reconnect?"),
+            MB_ICONQUESTION | MB_YESNO | MB_SETFOREGROUND);
+        if (nRecon == IDYES) _Connect(_nSelectedProfile);
+    }
+}
+
 void WireGuardTrayApp::_DeleteProfileAt(int profileIndex)
 {
     if (profileIndex < 0 || profileIndex >= _nProfiles)

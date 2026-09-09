@@ -7,6 +7,20 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.9.3] – 2026-09-09
+
+### Added
+
+- **Systray: Profil-Editor** — WireGuard-Profile k\u00F6nnen jetzt direkt im Tray bearbeitet werden.
+  Jedes Profil-Submenu enth\u00E4lt einen neuen Eintrag \u270F Bearbeiten.... Beim Klick wird die
+  verschl\u00FCsselte .conf.dpapi-Datei via Windows-DPAPI (CRYPTPROTECT_LOCAL_MACHINE)
+  entschl\u00FCsselt und im eingebetteten Texteditor (Monospace, scrollbar) angezeigt.
+  Nach dem Speichern wird die Datei atomar (temp \u2192 MoveFileEx) re-verschl\u00FCsselt zur\u00FCckgeschrieben.
+  War das Profil verbunden, wird vor dem Bearbeiten getrennt und nach dem Speichern
+  eine Wiederverbindung angeboten.
+
+---
+
 ## [2026.9.2] – 2026-09-09
 
 ### Fixed
