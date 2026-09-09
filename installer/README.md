@@ -48,6 +48,7 @@ Uninstall.exe /S
 | `/DISCONNECTREMOVE=1` | REG_DWORD | Tunnel trennen wenn YubiKey entfernt | `/DISCONNECTREMOVE=1` |
 | `/TILELABEL=text` | REG_SZ | Beschriftung des Pre-Login-Tiles | `/TILELABEL="Firmen-VPN"` |
 | `/CONFIGDIR=pfad` | REG_SZ | WireGuard Konfigurationsverzeichnis | `/CONFIGDIR="C:\WG\"` |
+| `/UPDATECHECK=n` | REG_DWORD | Update-Prüfung aktivieren/deaktivieren (1/0) | `/UPDATECHECK=0` |
 
 > Parameter werden immer angewendet – auch bei Updates. Nicht angegebene Parameter bleiben unverändert.
 
@@ -137,6 +138,7 @@ Der Installer setzt folgende Werte:
 | `LogLevel` | REG_SZ | Log-Level als Dezimalzahl (`"1"`=CRIT, `"3"`=DEBUG) |
 | `LogRetentionDays` | REG_SZ | Log-Dateien älter als N Tage löschen (`"7"`) |
 | `HandshakeTimeoutSec` | REG_SZ | Tunnel trennen wenn Handshake älter als N Sekunden (`"180"`) |
+| `AutoUpdateCheck` | REG_DWORD | Automatisch auf neue GitHub-Releases prüfen (`1`=aktiv, `0`=deaktiviert, Standard: `1`) |
 
 `SmartcardEnabled` und `SmartcardCertThumbprint` werden vom `Setup-YubiKey.ps1` gesetzt.
 

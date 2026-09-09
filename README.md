@@ -227,6 +227,7 @@ All settings: `HKEY_LOCAL_MACHINE\SOFTWARE\Jens Kaesler\WireGuard Credential Pro
 | `SmartcardConnectOnInsert` | REG_DWORD | Auto-connect when YubiKey inserted | `0` |
 | `SmartcardReaderName` | REG_SZ | Restrict to specific reader name | *(empty)* |
 | `HandshakeTimeoutSec` | REG_SZ | Disconnect if no handshake for N seconds (`"0"` = off) | `"180"` |
+| `AutoUpdateCheck` | REG_DWORD | Check GitHub for new releases on startup (`1`=on, `0`=off) | `1` |
 | `LogLevel` | REG_SZ | `0`=off `1`=CRIT `2`=WARN `3`=DEBUG | `"1"` |
 | `LogRetentionDays` | REG_SZ | Auto-delete logs older than N days | `"7"` |
 | `ExePath` | REG_SZ | Path to `wireguard.exe` | `C:\Program Files\WireGuard\wireguard.exe` |

@@ -41,6 +41,7 @@ Unicode true
 ;   /DISCONNECTREMOVE=1      SmartcardDisconnectOnRemove
 ;   /TILELABEL=<text>        TileLabel (pre-logon tile heading)
 ;   /CONFIGDIR=<path>        WireGuard configuration directory
+;   /UPDATECHECK=0           AutoUpdateCheck deaktivieren (Standard: 1)
 ; ============================================================
 
 ; ============================================================
@@ -521,6 +522,15 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
             DetailPrint "HandshakeTimeoutSec auf 180 gesetzt."
         ${EndIf}
 
+        ; AutoUpdateCheck: immer auf 1 (aktiv) setzen wenn der Wert noch nicht existiert.
+        ; Bereits vorhandene Benutzereinstellung bleibt erhalten.
+        ClearErrors
+        ReadRegDWORD $R0 HKLM "${REG_WGCP}" "AutoUpdateCheck"
+        ${If} ${Errors}
+            WriteRegDWORD HKLM "${REG_WGCP}" "AutoUpdateCheck" 1
+            DetailPrint "AutoUpdateCheck auf 1 (Standard) gesetzt."
+        ${EndIf}
+
         ; Weitere Werte nur beim Erstinstall (Benutzereinstellungen erhalten)
         ClearErrors
         ReadRegStr $R0 HKLM "${REG_WGCP}" "TileLabel"
@@ -599,6 +609,12 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
         ${If} $R1 != ""
             WriteRegStr HKLM "${REG_WGCP}" "ConfigDir" $R1
             DetailPrint "Parameter: ConfigDir=$R1"
+        ${EndIf}
+
+        ${GetOptions} $R0 "/UPDATECHECK=" $R1
+        ${If} $R1 != ""
+            WriteRegDWORD HKLM "${REG_WGCP}" "AutoUpdateCheck" $R1
+            DetailPrint "Parameter: AutoUpdateCheck=$R1"
         ${EndIf}
 
     SectionEnd
