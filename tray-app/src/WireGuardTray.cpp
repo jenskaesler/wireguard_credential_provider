@@ -672,12 +672,12 @@ void WireGuardTrayApp::_ShowContextMenu()
     POINT pt = {};
     GetCursorPos(&pt);
 
-    // Dark Mode: apply to the tray window AND to popup menus.
-    // SetWindowTheme on _hWnd alone has no effect on menu HWNDs (they are
-    // separate top-level windows created by the OS).  The correct approach is
-    // to call AllowDarkModeForWindow (uxtheme ordinal 133) on _hWnd and then
-    // FlushMenuThemes (ordinal 136) so that all menus spawned from this thread
-    // inherit the dark appearance.
+    // Dark Mode for popup menus.
+    // Win32 popup menus are independent top-level HWNDs (class "#32768") that
+    // the OS creates internally – SetWindowTheme on our own _hWnd has no effect
+    // on them.  The reliable fix is a thread-local WH_CALLWNDPROC hook that
+    // intercepts WM_CREATE for every "#32768" window and calls SetWindowTheme
+    // directly on that HWND before it is painted for the first time.
     HKEY hThemeKey = nullptr;
     DWORD dwLight = 1, dwSz = sizeof(dwLight);
     if (RegOpenKeyExW(HKEY_CURRENT_USER,
@@ -688,35 +688,48 @@ void WireGuardTrayApp::_ShowContextMenu()
                          reinterpret_cast<LPBYTE>(&dwLight), &dwSz);
         RegCloseKey(hThemeKey);
     }
+    bool bDark = (dwLight == 0);
+
+    // Hook state (file-scope statics – only one menu is open at a time)
+    typedef HRESULT (WINAPI* fnSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
+    struct MenuHookCtx { bool dark; fnSetWindowTheme pfnSwt; };
+    static MenuHookCtx s_mhCtx;
+    static HHOOK       s_hMenuHook = nullptr;
+
+    s_mhCtx.dark   = bDark;
+    s_mhCtx.pfnSwt = reinterpret_cast<fnSetWindowTheme>(
+        GetProcAddress(GetModuleHandleW(L"uxtheme.dll"), "SetWindowTheme"));
+    if (!s_mhCtx.pfnSwt)
     {
+        // uxtheme may not be loaded yet – load it (the handle leaks intentionally:
+        // uxtheme is a system DLL that stays loaded for the process lifetime)
         HMODULE hUx = LoadLibraryW(L"uxtheme.dll");
-        if (hUx)
-        {
-            typedef HRESULT (WINAPI* fnSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
-            typedef BOOL    (WINAPI* fnAllowDarkModeForWindow)(HWND, BOOL);
-            typedef void    (WINAPI* fnFlushMenuThemes)();
-
-            auto pfnSwt  = reinterpret_cast<fnSetWindowTheme>(
-                               GetProcAddress(hUx, "SetWindowTheme"));
-            // Ordinal 133: AllowDarkModeForWindow  (Win10 1809+)
-            auto pfnAdmf = reinterpret_cast<fnAllowDarkModeForWindow>(
-                               GetProcAddress(hUx, MAKEINTRESOURCEA(133)));
-            // Ordinal 136: FlushMenuThemes         (Win10 1809+)
-            auto pfnFmt  = reinterpret_cast<fnFlushMenuThemes>(
-                               GetProcAddress(hUx, MAKEINTRESOURCEA(136)));
-
-            bool bDark = (dwLight == 0);
-            if (pfnAdmf) pfnAdmf(_hWnd, bDark);
-            if (pfnSwt)  pfnSwt(_hWnd,
-                             bDark ? L"DarkMode_Explorer" : nullptr, nullptr);
-            if (pfnFmt)  pfnFmt();   // flushes theme cache → menus go dark
-
-            FreeLibrary(hUx);
-        }
+        if (hUx) s_mhCtx.pfnSwt = reinterpret_cast<fnSetWindowTheme>(
+                     GetProcAddress(hUx, "SetWindowTheme"));
     }
+
+    s_hMenuHook = SetWindowsHookExW(WH_CALLWNDPROC,
+        [](int nCode, WPARAM wParam, LPARAM lParam) -> LRESULT
+        {
+            if (nCode == HC_ACTION && s_mhCtx.dark && s_mhCtx.pfnSwt)
+            {
+                auto* p = reinterpret_cast<CWPSTRUCT*>(lParam);
+                if (p->message == WM_CREATE)
+                {
+                    WCHAR szCls[16] = {};
+                    GetClassNameW(p->hwnd, szCls, 16);
+                    if (wcscmp(szCls, L"#32768") == 0)   // menu window class
+                        s_mhCtx.pfnSwt(p->hwnd, L"DarkMode_Explorer", nullptr);
+                }
+            }
+            return CallNextHookEx(s_hMenuHook, nCode, wParam, lParam);
+        },
+        nullptr, GetCurrentThreadId());
 
     TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RIGHTBUTTON,
                    pt.x, pt.y, 0, _hWnd, nullptr);
+
+    if (s_hMenuHook) { UnhookWindowsHookEx(s_hMenuHook); s_hMenuHook = nullptr; }
     PostMessageW(_hWnd, WM_NULL, 0, 0);
     DestroyMenu(hMenu);
 }
