@@ -79,6 +79,8 @@
 #define IDM_PROFILE_SELECT_BASE  700
 #define IDM_PROFILE_SWITCH_BASE  800
 #define IDM_PROFILE_EDIT_BASE    900
+// 1000..1063: export profile i             (IDM_PROFILE_EXPORT_BASE + i)
+#define IDM_PROFILE_EXPORT_BASE 1000
 #define IDM_IMPORT          401
 #define IDM_OPEN_CONFIG_DIR 402
 #define IDM_DELETE_PROFILE  403
@@ -156,6 +158,7 @@ private:
     void _DeleteProfile();
     void _DeleteProfileAt(int profileIndex);
     void _EditProfile(int profileIndex);
+    void _ExportProfile(int profileIndex);
     void _OpenYubiKeyManager();
     WCHAR _wszYkMgrPath[MAX_PATH];  // path found during menu build
     void _OpenConfigDir();

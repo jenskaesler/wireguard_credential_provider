@@ -552,6 +552,11 @@ void WireGuardTrayApp::_ShowContextMenu()
             static_cast<UINT_PTR>(IDM_PROFILE_EDIT_BASE + i),
             T(L"\u270F  Bearbeiten...", L"\u270F  Edit..."));
 
+        // --- Submenu-Eintrag: Exportieren ---
+        AppendMenuW(hSub, MF_STRING,
+            static_cast<UINT_PTR>(IDM_PROFILE_EXPORT_BASE + i),
+            T(L"\U0001F4BE  Exportieren...", L"\U0001F4BE  Export..."));
+
 // --- Submenu-Eintrag: Loeschen (nur gesperrt wenn gerade verbunden) ---
         UINT uDelFlags = MF_STRING;
         if (bIsConnected) uDelFlags |= MF_GRAYED;  // erst trennen, dann loeschen
@@ -1223,6 +1228,13 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
         {
             int iEdit = static_cast<int>(uCmd - IDM_PROFILE_EDIT_BASE);
             _EditProfile(iEdit);
+            return 0;
+        }
+        if (uCmd >= IDM_PROFILE_EXPORT_BASE &&
+            uCmd <  static_cast<UINT>(IDM_PROFILE_EXPORT_BASE + _nProfiles))
+        {
+            int iExp = static_cast<int>(uCmd - IDM_PROFILE_EXPORT_BASE);
+            _ExportProfile(iExp);
             return 0;
         }
         if (uCmd >= IDM_PROFILE_DELETE_BASE &&
@@ -2749,6 +2761,94 @@ void WireGuardTrayApp::_EditProfile(int profileIndex)
             MB_ICONQUESTION | MB_YESNO | MB_SETFOREGROUND);
         if (nRecon == IDYES) _Connect(_nSelectedProfile);
     }
+}
+
+// ---------------------------------------------------------------------------
+// _ExportProfile – decrypt .conf.dpapi and save as plaintext .conf via
+//                  a file picker. The user chooses the destination.
+// ---------------------------------------------------------------------------
+void WireGuardTrayApp::_ExportProfile(int profileIndex)
+{
+    if (profileIndex < 0 || profileIndex >= _nProfiles) return;
+    PCWSTR pwszProfile = _rgProfiles[profileIndex];
+
+    // Build source .conf.dpapi path
+    WCHAR wszConfigDir[MAX_PATH_WGCP] = {};
+    WGGetConfigDir(wszConfigDir, MAX_PATH_WGCP);
+    WCHAR wszDpapiPath[MAX_PATH_WGCP] = {};
+    StringCchPrintfW(wszDpapiPath, MAX_PATH_WGCP, L"%s%s.conf.dpapi",
+                     wszConfigDir, pwszProfile);
+
+    // Decrypt via SYSTEM service pipe (op 3)
+    BYTE* pbPlain = nullptr;
+    DWORD dwPlainLen = 0;
+    if (!_SvcReadDecrypted(wszDpapiPath, &pbPlain, &dwPlainLen))
+    {
+        MessageBoxW(_hWnd,
+            T(L"Entschlüsselung fehlgeschlagen. Bitte prüfen Sie den Hilfsdienst.",
+              L"Decryption failed. Please check the helper service."),
+            T(L"Fehler", L"Error"), MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
+        return;
+    }
+
+    // Default filename: <profilename>.conf
+    WCHAR wszDest[MAX_PATH_WGCP] = {};
+    StringCchPrintfW(wszDest, MAX_PATH_WGCP, L"%s.conf", pwszProfile);
+
+    OPENFILENAMEW ofn = { sizeof(ofn) };
+    ofn.hwndOwner   = _hWnd;
+    ofn.lpstrFilter = L"WireGuard Konfiguration (*.conf)\0*.conf\0\0";
+    ofn.lpstrFile   = wszDest;
+    ofn.nMaxFile    = MAX_PATH_WGCP;
+    ofn.lpstrTitle  = T(L"Profil exportieren", L"Export profile");
+    ofn.lpstrDefExt = L"conf";
+    ofn.Flags       = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+
+    if (!GetSaveFileNameW(&ofn))
+    {
+        // User cancelled
+        delete[] pbPlain;
+        return;
+    }
+
+    // Write plaintext to chosen path
+    HANDLE hFile = CreateFileW(wszDest, GENERIC_WRITE, 0, nullptr,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        DWORD dwErr = GetLastError();
+        delete[] pbPlain;
+        WCHAR wszErr[128] = {};
+        StringCchPrintfW(wszErr, ARRAYSIZE(wszErr),
+            T(L"Datei konnte nicht geschrieben werden (Fehler %lu).",
+              L"Could not write file (error %lu)."), dwErr);
+        MessageBoxW(_hWnd, wszErr, T(L"Fehler", L"Error"),
+                    MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
+        return;
+    }
+
+    DWORD dwWritten = 0;
+    WriteFile(hFile, pbPlain, dwPlainLen, &dwWritten, nullptr);
+    CloseHandle(hFile);
+    delete[] pbPlain;
+
+    if (dwWritten != dwPlainLen)
+    {
+        MessageBoxW(_hWnd,
+            T(L"Export unvollständig – Datei möglicherweise beschädigt.",
+              L"Export incomplete – file may be corrupted."),
+            T(L"Warnung", L"Warning"), MB_ICONWARNING | MB_OK | MB_SETFOREGROUND);
+        return;
+    }
+
+    WCHAR wszMsg[MAX_PATH_WGCP + 64] = {};
+    StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+        T(L"Profil „%s“ wurde exportiert.",
+          L"Profile “%s” was exported."),
+        pwszProfile);
+    MessageBoxW(_hWnd, wszMsg,
+        T(L"Export erfolgreich", L"Export successful"),
+        MB_ICONINFORMATION | MB_OK | MB_SETFOREGROUND);
 }
 
 void WireGuardTrayApp::_DeleteProfileAt(int profileIndex)
