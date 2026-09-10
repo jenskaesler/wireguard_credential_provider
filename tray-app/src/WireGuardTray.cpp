@@ -672,7 +672,12 @@ void WireGuardTrayApp::_ShowContextMenu()
     POINT pt = {};
     GetCursorPos(&pt);
 
-    // Dark Mode
+    // Dark Mode: apply to the tray window AND to popup menus.
+    // SetWindowTheme on _hWnd alone has no effect on menu HWNDs (they are
+    // separate top-level windows created by the OS).  The correct approach is
+    // to call AllowDarkModeForWindow (uxtheme ordinal 133) on _hWnd and then
+    // FlushMenuThemes (ordinal 136) so that all menus spawned from this thread
+    // inherit the dark appearance.
     HKEY hThemeKey = nullptr;
     DWORD dwLight = 1, dwSz = sizeof(dwLight);
     if (RegOpenKeyExW(HKEY_CURRENT_USER,
@@ -683,15 +688,29 @@ void WireGuardTrayApp::_ShowContextMenu()
                          reinterpret_cast<LPBYTE>(&dwLight), &dwSz);
         RegCloseKey(hThemeKey);
     }
-    if (dwLight == 0)
     {
         HMODULE hUx = LoadLibraryW(L"uxtheme.dll");
         if (hUx)
         {
-            typedef HRESULT(WINAPI* fnSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
-            auto pfn = reinterpret_cast<fnSetWindowTheme>(
-                GetProcAddress(hUx, "SetWindowTheme"));
-            if (pfn) pfn(_hWnd, L"DarkMode_Explorer", nullptr);
+            typedef HRESULT (WINAPI* fnSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
+            typedef BOOL    (WINAPI* fnAllowDarkModeForWindow)(HWND, BOOL);
+            typedef void    (WINAPI* fnFlushMenuThemes)();
+
+            auto pfnSwt  = reinterpret_cast<fnSetWindowTheme>(
+                               GetProcAddress(hUx, "SetWindowTheme"));
+            // Ordinal 133: AllowDarkModeForWindow  (Win10 1809+)
+            auto pfnAdmf = reinterpret_cast<fnAllowDarkModeForWindow>(
+                               GetProcAddress(hUx, MAKEINTRESOURCEA(133)));
+            // Ordinal 136: FlushMenuThemes         (Win10 1809+)
+            auto pfnFmt  = reinterpret_cast<fnFlushMenuThemes>(
+                               GetProcAddress(hUx, MAKEINTRESOURCEA(136)));
+
+            bool bDark = (dwLight == 0);
+            if (pfnAdmf) pfnAdmf(_hWnd, bDark);
+            if (pfnSwt)  pfnSwt(_hWnd,
+                             bDark ? L"DarkMode_Explorer" : nullptr, nullptr);
+            if (pfnFmt)  pfnFmt();   // flushes theme cache → menus go dark
+
             FreeLibrary(hUx);
         }
     }
