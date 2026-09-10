@@ -1047,6 +1047,23 @@ static HBRUSH _DmEditBrush()
     return h;
 }
 
+// System UI font (Segoe UI 9pt, from NONCLIENTMETRICS) – cached for process lifetime.
+static HFONT _UiFont(bool bBold = false)
+{
+    static HFONT s_hNormal = nullptr;
+    static HFONT s_hBold   = nullptr;
+    HFONT& rh = bBold ? s_hBold : s_hNormal;
+    if (!rh)
+    {
+        NONCLIENTMETRICSW ncm = {};
+        ncm.cbSize = sizeof(ncm);
+        SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
+        ncm.lfMessageFont.lfWeight = bBold ? FW_BOLD : FW_NORMAL;
+        rh = CreateFontIndirectW(&ncm.lfMessageFont);
+    }
+    return rh;
+}
+
 // Call from WM_CTLCOLORSTATIC / WM_CTLCOLOREDIT in dark mode.
 // Returns the brush to return from the message handler (0 = not dark mode).
 static LRESULT _DmCtlColor(HDC hdc, bool bEdit = false)
@@ -1118,13 +1135,9 @@ INT_PTR CALLBACK WireGuardTrayApp::_PinDlgProc(HWND hDlg, UINT msg,
                      DLG_W, DLG_H,
                      SWP_NOZORDER);
 
-        // Shared fonts
-        HFONT hFontBold = CreateFontW(15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        HFONT hFontUI = CreateFontW(13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        // Shared fonts (system UI font – Segoe UI 9pt on modern Windows)
+        HFONT hFontBold = _UiFont(true);
+        HFONT hFontUI   = _UiFont(false);
 
         // --- Header (y 0-46) ---
         HWND hHdr = CreateWindowExW(0, L"STATIC", L"",
@@ -1216,6 +1229,9 @@ INT_PTR CALLBACK WireGuardTrayApp::_PinDlgProc(HWND hDlg, UINT msg,
             FillRect(reinterpret_cast<HDC>(wParam), &rc, _DmBgBrush());
             return 1;
         }
+        return FALSE;
+    case WM_CTLCOLORBTN:
+        if (LRESULT lr = _DmCtlColor(reinterpret_cast<HDC>(wParam))) return lr;
         return FALSE;
     case WM_CTLCOLOREDIT:
         if (LRESULT lr = _DmCtlColor(reinterpret_cast<HDC>(wParam), true)) return lr;
@@ -2737,26 +2753,44 @@ void WireGuardTrayApp::_EditProfile(int profileIndex)
                 pad, pad, rc.right-pad*2, editH,
                 hw, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_WGEDIT_TEXT)), nullptr, nullptr);
 
-            HFONT hFont = CreateFontW(
+            // Consolas for the code edit control
+            HFONT hFontCode = CreateFontW(
                 -MulDiv(10, GetDeviceCaps(GetDC(nullptr), LOGPIXELSY), 72),
                 0,0,0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, FIXED_PITCH|FF_MODERN, L"Consolas");
-            if (hFont) SendMessageW(hEdit, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
+            if (hFontCode) SendMessageW(hEdit, WM_SETFONT, reinterpret_cast<WPARAM>(hFontCode), TRUE);
             if (pd && pd->pwszConf) SetWindowTextW(hEdit, pd->pwszConf);
 
             int btnY = editH + pad*2;
             int btnX = rc.right - (btnW+pad)*2;
-            CreateWindowExW(0, L"BUTTON",
+            HWND hBtnOK = CreateWindowExW(0, L"BUTTON",
                 T(L"Speichern", L"Save"),
                 WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON,
                 btnX, btnY, btnW, btnH,
                 hw, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDOK)), nullptr, nullptr);
-            CreateWindowExW(0, L"BUTTON",
+            HWND hBtnCan = CreateWindowExW(0, L"BUTTON",
                 T(L"Abbrechen", L"Cancel"),
                 WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
                 btnX+btnW+pad, btnY, btnW, btnH,
                 hw, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDCANCEL)), nullptr, nullptr);
+
+            // Consistent font on buttons
+            HFONT hFontUI = _UiFont(false);
+            if (hFontUI)
+            {
+                SendMessageW(hBtnOK,  WM_SETFONT, reinterpret_cast<WPARAM>(hFontUI), TRUE);
+                SendMessageW(hBtnCan, WM_SETFONT, reinterpret_cast<WPARAM>(hFontUI), TRUE);
+            }
+
+            // Dark mode: apply AFTER all children exist
+            typedef HRESULT (WINAPI* fnSwt)(HWND, LPCWSTR, LPCWSTR);
+            HMODULE hUxE = GetModuleHandleW(L"uxtheme.dll");
+            auto pfnSwt2 = hUxE ? reinterpret_cast<fnSwt>(GetProcAddress(hUxE, "SetWindowTheme")) : nullptr;
+            _DmApplyToWindow(hw);
+            if (_IsDarkMode() && pfnSwt2)
+                pfnSwt2(hEdit, L"DarkMode_Explorer", nullptr);
+
             return 0;
         }
         if (m == WM_SIZE)
@@ -2800,12 +2834,27 @@ void WireGuardTrayApp::_EditProfile(int profileIndex)
             DestroyWindow(hw);
             return 0;
         }
+        if (m == WM_ERASEBKGND && _IsDarkMode()) {
+            RECT rc; GetClientRect(hw, &rc);
+            FillRect(reinterpret_cast<HDC>(wp), &rc, _DmBgBrush());
+            return 1;
+        }
+        if (m == WM_CTLCOLOREDIT) {
+            if (LRESULT lr = _DmCtlColor(reinterpret_cast<HDC>(wp), true)) return lr;
+        }
+        if (m == WM_CTLCOLORSTATIC) {
+            if (LRESULT lr = _DmCtlColor(reinterpret_cast<HDC>(wp))) return lr;
+        }
+        if (m == WM_CTLCOLORBTN) {
+            if (LRESULT lr = _DmCtlColor(reinterpret_cast<HDC>(wp))) return lr;
+        }
         if (m == WM_DESTROY) { return 0; }
         return DefWindowProcW(hw, m, wp, lp);
     };
     wc.hInstance    = _hInst;
     wc.hCursor      = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.hbrBackground = _IsDarkMode() ? _DmBgBrush()
+                                      : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     wc.lpszClassName = L"WGCPProfileEditor";
     RegisterClassExW(&wc);  // may fail if already registered – that's fine
 
@@ -3365,18 +3414,10 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
         s_pd = reinterpret_cast<AboutDlgData*>(cs->lpCreateParams);
 
-        // Fonts
-        HDC hdc = GetDC(hWnd);
-        int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-        ReleaseDC(hWnd, hdc);
-        s_fonts.hBold   = CreateFontW(-MulDiv(10,dpi,72),0,0,0,FW_BOLD,  FALSE,FALSE,FALSE,
-                                       DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-                                       CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
-        s_fonts.hNormal = CreateFontW(-MulDiv(10,dpi,72),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
-                                       DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-                                       CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
+        // Fonts – use cached system UI font for consistency across all dialogs
+        s_fonts.hBold   = _UiFont(true);
+        s_fonts.hNormal = _UiFont(false);
         s_hbrDialog = _IsDarkMode() ? _DmBgBrush() : GetSysColorBrush(COLOR_BTNFACE);
-        _DmApplyToWindow(hWnd);   // OK button + AllowDarkModeForWindow
 
         // Layout constants – all y values are client-area offsets
         // Header strip: y=0..56 (painted in WM_PAINT)
@@ -3460,13 +3501,15 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
             s_pd->hInst, nullptr);
         SendMessageW(hOK, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
 
+        // Apply dark mode after all children exist
+        _DmApplyToWindow(hWnd);
+
         return 0;
     }
 
     // ------------------------------------------------------------------
     case WM_DESTROY:
-        if (s_fonts.hBold)   { DeleteObject(s_fonts.hBold);   s_fonts.hBold   = nullptr; }
-        if (s_fonts.hNormal) { DeleteObject(s_fonts.hNormal); s_fonts.hNormal = nullptr; }
+        // s_fonts are _UiFont() cached handles – do not delete them
         return 0;
 
     // ------------------------------------------------------------------
@@ -3516,6 +3559,11 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
             FillRect(reinterpret_cast<HDC>(wParam), &rc, _DmBgBrush());
             return 1;
         }
+        return FALSE;
+
+    // ------------------------------------------------------------------
+    case WM_CTLCOLORBTN:
+        if (LRESULT lr = _DmCtlColor(reinterpret_cast<HDC>(wParam))) return lr;
         return FALSE;
 
     // ------------------------------------------------------------------
