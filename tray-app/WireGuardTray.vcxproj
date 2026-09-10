@@ -82,9 +82,16 @@
       </AdditionalDependencies>
       <EnableCOMDATFolding Condition="'$(Configuration)'=='Release'">true</EnableCOMDATFolding>
       <OptimizeReferences Condition="'$(Configuration)'=='Release'">true</OptimizeReferences>
-      <!-- Manifest for visual styles and DPI awareness -->
-      <ManifestFile>$(ProjectDir)resources\WireGuardTray.manifest</ManifestFile>
+      <!-- Suppress the auto-generated /MANIFESTUAC snippet; our custom manifest
+           already contains the requestedExecutionLevel (requireAdministrator). -->
+      <AdditionalOptions>/MANIFESTUAC:NO %(AdditionalOptions)</AdditionalOptions>
     </Link>
+
+    <!-- Merge custom manifest: comctl32 v6 (WC_LINK, visual styles), DPI awareness, UAC level -->
+    <Manifest>
+      <AdditionalManifestFiles>$(ProjectDir)resources\WireGuardTray.manifest</AdditionalManifestFiles>
+      <EmbedManifest>true</EmbedManifest>
+    </Manifest>
 
     <ResourceCompile>
       <AdditionalIncludeDirectories>$(SolutionDir)resources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
