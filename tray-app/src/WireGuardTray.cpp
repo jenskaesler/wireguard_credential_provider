@@ -3265,7 +3265,7 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
         // -- GitHub SysLink (y=180) --
         WCHAR wszLink[512] = {};
         StringCchPrintfW(wszLink, ARRAYSIZE(wszLink),
-            L"<a href=\"%s\">&#x1F517; github.com/jenskaesler/wireguard_credential_provider</a>",
+            L"<a href=\"%s\">\U0001F517 github.com/jenskaesler/wireguard_credential_provider</a>",
             s_pd->url);
         HWND hLink = CreateWindowExW(0, WC_LINK, wszLink,
             WS_CHILD|WS_VISIBLE|WS_TABSTOP,
