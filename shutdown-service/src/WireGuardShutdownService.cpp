@@ -15,6 +15,8 @@
 #include <windows.h>
 #include <strsafe.h>
 #include <winsvc.h>
+#include <new>      // std::nothrow
+#include <wincrypt.h>  // CryptProtectData / CryptUnprotectData
 
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "wtsapi32.lib")
@@ -37,6 +39,12 @@
 #define MAX_BUF      1024
 #define MAX_PROFILES   64
 #define REG_INSTALLDIR  L"InstallDir"
+
+// Named pipe for SYSTEM-level file access (config read/write)
+// Protocol: [DWORD op][DWORD pathBytes][DWORD dataBytes][path UTF-16][data]
+// Response: [DWORD result][DWORD dataBytes][data]
+// op 1=READ, 2=WRITE; result 0=OK, else Win32 error code
+#define WGCP_PIPE_NAME   L"\\\\.\\pipe\\WireGuardCPHelperSvc"
 
 static SERVICE_STATUS_HANDLE g_hSvcStatus = nullptr;
 static HANDLE                g_hStopEvent  = nullptr;
@@ -330,6 +338,281 @@ static DWORD WINAPI SvcCtrlHandler(DWORD dwCtrl, DWORD dwEventType, LPVOID lpEve
 }
 
 // ---------------------------------------------------------------------------
+// Named pipe: SYSTEM-level file proxy for WireGuard config files
+// ops: 1=READ_RAW, 2=WRITE_RAW, 3=READ_DECRYPTED, 4=WRITE_ENCRYPTED,
+//      5=WRITE_CONF (plaintext .conf), 6=DELETE_FILE
+// ---------------------------------------------------------------------------
+static bool PipeSvcExact(HANDLE h, void* p, DWORD cb, bool bRead)
+{
+    DWORD done = 0, chunk = 0;
+    while (done < cb)
+    {
+        BOOL ok = bRead
+            ? ReadFile(h, (BYTE*)p + done, cb - done, &chunk, nullptr)
+            : WriteFile(h, (BYTE*)p + done, cb - done, &chunk, nullptr);
+        if (!ok || chunk == 0) return false;
+        done += chunk;
+    }
+    return true;
+}
+
+static void SendPipeResp(HANDLE h, DWORD result, const BYTE* pData, DWORD cbData)
+{
+    PipeSvcExact(h, &result, 4, false);
+    PipeSvcExact(h, &cbData,  4, false);
+    if (pData && cbData > 0)
+        PipeSvcExact(h, (void*)pData, cbData, false);
+}
+
+static DWORD WINAPI PipeClientThread(LPVOID hPipeArg)
+{
+    HANDLE hPipe = reinterpret_cast<HANDLE>(hPipeArg);
+
+    DWORD op = 0, pathBytes = 0, dataBytes = 0;
+    if (!PipeSvcExact(hPipe, &op,        4, true) ||
+        !PipeSvcExact(hPipe, &pathBytes, 4, true) ||
+        !PipeSvcExact(hPipe, &dataBytes, 4, true) ||
+        pathBytes == 0 || pathBytes > (MAX_BUF - 1) * 2)
+        goto done;
+
+    {
+        // Read path
+        WCHAR wszPath[MAX_BUF] = {};
+        if (!PipeSvcExact(hPipe, wszPath, pathBytes, true)) goto done;
+        wszPath[pathBytes / sizeof(WCHAR)] = L'\0';
+
+        // Security: path must be inside WG config dir and end with .conf.dpapi or .conf
+        size_t dirLen  = wcslen(WG_CONFIG_DIR);
+        size_t pathLen = wcslen(wszPath);
+        size_t extDpapi = wcslen(WG_CONFIG_EXT);  // ".conf.dpapi"
+        size_t extConf  = 5;                       // ".conf"
+        bool bValid = (pathLen > dirLen) &&
+                      (_wcsnicmp(wszPath, WG_CONFIG_DIR, dirLen) == 0) &&
+                      ( (pathLen > extDpapi && _wcsicmp(wszPath + pathLen - extDpapi, WG_CONFIG_EXT) == 0) ||
+                        (pathLen > extConf  && _wcsicmp(wszPath + pathLen - extConf,  L".conf")       == 0) );
+        if (!bValid)
+        { SendPipeResp(hPipe, ERROR_ACCESS_DENIED, nullptr, 0); goto done; }
+
+        if (op == 1) // READ (raw encrypted bytes)
+        {
+            HANDLE hFile = CreateFileW(wszPath, GENERIC_READ, FILE_SHARE_READ,
+                                       nullptr, OPEN_EXISTING, 0, nullptr);
+            if (hFile == INVALID_HANDLE_VALUE)
+            { SendPipeResp(hPipe, GetLastError(), nullptr, 0); goto done; }
+
+            DWORD fileSize = GetFileSize(hFile, nullptr);
+            BYTE* buf = new(std::nothrow) BYTE[fileSize];
+            DWORD rd = 0;
+            if (!buf || !ReadFile(hFile, buf, fileSize, &rd, nullptr) || rd != fileSize)
+            {
+                DWORD e = GetLastError() ? GetLastError() : ERROR_OUTOFMEMORY;
+                CloseHandle(hFile); delete[] buf;
+                SendPipeResp(hPipe, e, nullptr, 0); goto done;
+            }
+            CloseHandle(hFile);
+            SendPipeResp(hPipe, 0, buf, rd);
+            delete[] buf;
+        }
+        else if (op == 2) // WRITE (raw encrypted bytes)
+        {
+            if (dataBytes == 0 || dataBytes > 1024 * 1024)
+            { SendPipeResp(hPipe, ERROR_INVALID_PARAMETER, nullptr, 0); goto done; }
+
+            BYTE* buf = new(std::nothrow) BYTE[dataBytes];
+            if (!buf || !PipeSvcExact(hPipe, buf, dataBytes, true))
+            {
+                delete[] buf;
+                SendPipeResp(hPipe, ERROR_OUTOFMEMORY, nullptr, 0); goto done;
+            }
+
+            // Atomic write: write temp, then MoveFileEx
+            WCHAR wszTmp[MAX_BUF] = {};
+            StringCchPrintfW(wszTmp, MAX_BUF, L"%s.tmp", wszPath);
+            HANDLE hFile = CreateFileW(wszTmp, GENERIC_WRITE, 0, nullptr,
+                                       CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hFile == INVALID_HANDLE_VALUE)
+            {
+                DWORD e = GetLastError(); delete[] buf;
+                SendPipeResp(hPipe, e, nullptr, 0); goto done;
+            }
+            DWORD wr = 0;
+            BOOL bOk = WriteFile(hFile, buf, dataBytes, &wr, nullptr);
+            DWORD e = GetLastError();
+            CloseHandle(hFile);
+            delete[] buf;
+            if (!bOk || wr != dataBytes)
+            {
+                DeleteFileW(wszTmp);
+                SendPipeResp(hPipe, e ? e : ERROR_WRITE_FAULT, nullptr, 0); goto done;
+            }
+            if (!MoveFileExW(wszTmp, wszPath, MOVEFILE_REPLACE_EXISTING))
+            {
+                e = GetLastError();
+                DeleteFileW(wszTmp);
+                SendPipeResp(hPipe, e, nullptr, 0); goto done;
+            }
+            SendPipeResp(hPipe, 0, nullptr, 0);
+        }
+        else if (op == 3) // READ_DECRYPTED: read file + DPAPI decrypt → plaintext UTF-8
+        {
+            // Read encrypted file
+            HANDLE hFile = CreateFileW(wszPath, GENERIC_READ, FILE_SHARE_READ,
+                                       nullptr, OPEN_EXISTING, 0, nullptr);
+            if (hFile == INVALID_HANDLE_VALUE)
+            { SendPipeResp(hPipe, GetLastError(), nullptr, 0); goto done; }
+
+            DWORD fileSize = GetFileSize(hFile, nullptr);
+            BYTE* pbEnc = new(std::nothrow) BYTE[fileSize];
+            DWORD rd = 0;
+            if (!pbEnc || !ReadFile(hFile, pbEnc, fileSize, &rd, nullptr) || rd != fileSize)
+            {
+                DWORD e = GetLastError() ? GetLastError() : ERROR_OUTOFMEMORY;
+                CloseHandle(hFile); delete[] pbEnc;
+                SendPipeResp(hPipe, e, nullptr, 0); goto done;
+            }
+            CloseHandle(hFile);
+
+            // DPAPI decrypt – service runs as SYSTEM, can decrypt LOCAL_MACHINE blobs
+            DATA_BLOB blobIn  = { rd, pbEnc };
+            DATA_BLOB blobOut = { 0, nullptr };
+            BOOL bDecOk = CryptUnprotectData(&blobIn, nullptr, nullptr, nullptr, nullptr,
+                                              CRYPTPROTECT_UI_FORBIDDEN, &blobOut);
+            DWORD decErr = GetLastError();
+            delete[] pbEnc;
+            if (!bDecOk)
+            { SendPipeResp(hPipe, decErr, nullptr, 0); goto done; }
+
+            SendPipeResp(hPipe, 0, blobOut.pbData, blobOut.cbData);
+            LocalFree(blobOut.pbData);
+        }
+        else if (op == 4) // WRITE_ENCRYPTED: receive plaintext UTF-8 → DPAPI encrypt → write
+        {
+            if (dataBytes == 0 || dataBytes > 1024 * 1024)
+            { SendPipeResp(hPipe, ERROR_INVALID_PARAMETER, nullptr, 0); goto done; }
+
+            BYTE* pbPlain = new(std::nothrow) BYTE[dataBytes];
+            if (!pbPlain || !PipeSvcExact(hPipe, pbPlain, dataBytes, true))
+            {
+                delete[] pbPlain;
+                SendPipeResp(hPipe, ERROR_OUTOFMEMORY, nullptr, 0); goto done;
+            }
+
+            // DPAPI re-encrypt – same flags WireGuard uses
+            DATA_BLOB blobPlain  = { dataBytes, pbPlain };
+            DATA_BLOB blobCipher = { 0, nullptr };
+            BOOL bEncOk = CryptProtectData(&blobPlain, nullptr, nullptr, nullptr, nullptr,
+                                            CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN,
+                                            &blobCipher);
+            DWORD encErr = GetLastError();
+            delete[] pbPlain;
+            if (!bEncOk)
+            { SendPipeResp(hPipe, encErr, nullptr, 0); goto done; }
+
+            // Atomic write: temp → MoveFileEx
+            WCHAR wszTmp[MAX_BUF] = {};
+            StringCchPrintfW(wszTmp, MAX_BUF, L"%s.tmp", wszPath);
+            HANDLE hFile = CreateFileW(wszTmp, GENERIC_WRITE, 0, nullptr,
+                                       CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hFile == INVALID_HANDLE_VALUE)
+            {
+                DWORD e = GetLastError();
+                LocalFree(blobCipher.pbData);
+                SendPipeResp(hPipe, e, nullptr, 0); goto done;
+            }
+            DWORD wr = 0;
+            BOOL bWrOk = WriteFile(hFile, blobCipher.pbData, blobCipher.cbData, &wr, nullptr);
+            DWORD wrErr = GetLastError();
+            CloseHandle(hFile);
+            LocalFree(blobCipher.pbData);
+            if (!bWrOk || wr != blobCipher.cbData)
+            {
+                DeleteFileW(wszTmp);
+                SendPipeResp(hPipe, wrErr ? wrErr : ERROR_WRITE_FAULT, nullptr, 0); goto done;
+            }
+            if (!MoveFileExW(wszTmp, wszPath, MOVEFILE_REPLACE_EXISTING))
+            {
+                DWORD e = GetLastError();
+                DeleteFileW(wszTmp);
+                SendPipeResp(hPipe, e, nullptr, 0); goto done;
+            }
+            SendPipeResp(hPipe, 0, nullptr, 0);
+        }
+        else if (op == 5) // WRITE_CONF: write plaintext bytes as-is (no encryption)
+        {
+            if (dataBytes == 0 || dataBytes > 1024 * 1024)
+            { SendPipeResp(hPipe, ERROR_INVALID_PARAMETER, nullptr, 0); goto done; }
+
+            BYTE* pbData = new(std::nothrow) BYTE[dataBytes];
+            if (!pbData || !PipeSvcExact(hPipe, pbData, dataBytes, true))
+            {
+                delete[] pbData;
+                SendPipeResp(hPipe, ERROR_OUTOFMEMORY, nullptr, 0); goto done;
+            }
+
+            HANDLE hFile = CreateFileW(wszPath, GENERIC_WRITE, 0, nullptr,
+                                       CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hFile == INVALID_HANDLE_VALUE)
+            {
+                DWORD e = GetLastError(); delete[] pbData;
+                SendPipeResp(hPipe, e, nullptr, 0); goto done;
+            }
+            DWORD wr = 0;
+            BOOL bOk = WriteFile(hFile, pbData, dataBytes, &wr, nullptr);
+            DWORD e = GetLastError();
+            CloseHandle(hFile);
+            delete[] pbData;
+            if (!bOk || wr != dataBytes)
+            { SendPipeResp(hPipe, e ? e : ERROR_WRITE_FAULT, nullptr, 0); goto done; }
+            SendPipeResp(hPipe, 0, nullptr, 0);
+        }
+        else if (op == 6) // DELETE_FILE: delete .conf or .conf.dpapi from config dir
+        {
+            if (DeleteFileW(wszPath))
+                SendPipeResp(hPipe, 0, nullptr, 0);
+            else
+                SendPipeResp(hPipe, GetLastError(), nullptr, 0);
+        }
+    }
+
+done:
+    FlushFileBuffers(hPipe);
+    DisconnectNamedPipe(hPipe);
+    CloseHandle(hPipe);
+    return 0;
+}
+
+static DWORD WINAPI PipeServerThread(LPVOID)
+{
+    // Allow Authenticated Users to connect (path validation is the security gate)
+    SECURITY_DESCRIPTOR sd = {};
+    InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+    SetSecurityDescriptorDacl(&sd, TRUE, nullptr, FALSE);  // NULL DACL = world-accessible
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), &sd, FALSE };
+
+    for (;;)
+    {
+        HANDLE hPipe = CreateNamedPipeW(
+            WGCP_PIPE_NAME,
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            PIPE_UNLIMITED_INSTANCES,
+            65536, 65536, 0, &sa);
+        if (hPipe == INVALID_HANDLE_VALUE) { Sleep(5000); continue; }
+
+        if (ConnectNamedPipe(hPipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED)
+        {
+            HANDLE hT = CreateThread(nullptr, 0, PipeClientThread,
+                                     reinterpret_cast<LPVOID>(hPipe), 0, nullptr);
+            if (hT) CloseHandle(hT);
+            else { DisconnectNamedPipe(hPipe); CloseHandle(hPipe); }
+        }
+        else
+            CloseHandle(hPipe);
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // Service main - simply waits for PRESHUTDOWN or STOP
 // ---------------------------------------------------------------------------
 static VOID WINAPI ServiceMain(DWORD, LPWSTR*)
@@ -350,6 +633,18 @@ static VOID WINAPI ServiceMain(DWORD, LPWSTR*)
     SetServiceStatus(g_hSvcStatus, &ss);
 
     LogEvent(L"WireGuard Shutdown Helper is running - waiting for shutdown/logon.");
+
+    // Start named pipe server for SYSTEM-level file access
+    {
+        HANDLE hPipeThr = CreateThread(nullptr, 0, PipeServerThread, nullptr, 0, nullptr);
+        if (hPipeThr)
+        {
+            CloseHandle(hPipeThr);
+            LogEvent(L"Pipe server thread started: " WGCP_PIPE_NAME);
+        }
+        else
+            LogEvent(L"WARNING: failed to start pipe server thread");
+    }
 
     // Block until STOP or PRESHUTDOWN
     WaitForSingleObject(g_hStopEvent, INFINITE);

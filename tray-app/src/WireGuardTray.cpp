@@ -2323,6 +2323,89 @@ static bool _ImpersonateAsSystem()
     CloseHandle(hProc);
     return bOk;
 }
+
+// ---------------------------------------------------------------------------
+// Named pipe helpers: proxy file I/O through WireGuardShutdownHelper (SYSTEM)
+// so we can read/write SYSTEM-only .conf.dpapi files from the user-context tray.
+// ---------------------------------------------------------------------------
+#define WGCP_PIPE_NAME  L"\\\\.\\pipe\\WireGuardCPHelperSvc"
+
+static bool _PipeExact(HANDLE h, void* p, DWORD cb, bool bRead)
+{
+    DWORD done = 0, chunk = 0;
+    while (done < cb)
+    {
+        BOOL ok = bRead
+            ? ReadFile(h, (BYTE*)p + done, cb - done, &chunk, nullptr)
+            : WriteFile(h, (BYTE*)p + done, cb - done, &chunk, nullptr);
+        if (!ok || chunk == 0) return false;
+        done += chunk;
+    }
+    return true;
+}
+
+// Send a pipe request and receive a response.
+// op 3 = READ_DECRYPTED:  service reads + DPAPI-decrypts → returns plaintext bytes
+// op 4 = WRITE_ENCRYPTED: tray sends plaintext → service DPAPI-encrypts + writes file
+static bool _SvcPipeOp(DWORD op, PCWSTR wszPath,
+                        const BYTE* pSendData, DWORD dwSendSize,
+                        BYTE** ppRecvData,      DWORD* pdwRecvSize)
+{
+    HANDLE hPipe = CreateFileW(WGCP_PIPE_NAME, GENERIC_READ | GENERIC_WRITE,
+                               0, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (hPipe == INVALID_HANDLE_VALUE) return false;
+
+    DWORD pathBytes = static_cast<DWORD>(wcslen(wszPath) * sizeof(WCHAR));
+    bool ok = _PipeExact(hPipe, &op,        4, false) &&
+              _PipeExact(hPipe, &pathBytes, 4, false) &&
+              _PipeExact(hPipe, &dwSendSize,4, false) &&
+              _PipeExact(hPipe, (void*)wszPath, pathBytes, false);
+    if (ok && pSendData && dwSendSize > 0)
+        ok = _PipeExact(hPipe, (void*)pSendData, dwSendSize, false);
+    if (!ok) { CloseHandle(hPipe); return false; }
+
+    DWORD result = 0, recvSize = 0;
+    ok = _PipeExact(hPipe, &result,   4, true) &&
+         _PipeExact(hPipe, &recvSize, 4, true);
+    if (!ok || result != 0) { CloseHandle(hPipe); SetLastError(result); return false; }
+
+    if (ppRecvData && recvSize > 0)
+    {
+        BYTE* buf = new(std::nothrow) BYTE[recvSize];
+        ok = buf && _PipeExact(hPipe, buf, recvSize, true);
+        CloseHandle(hPipe);
+        if (!ok) { delete[] buf; return false; }
+        *ppRecvData  = buf;
+        *pdwRecvSize = recvSize;
+    }
+    else
+    {
+        CloseHandle(hPipe);
+        if (ppRecvData)  { *ppRecvData  = nullptr; }
+        if (pdwRecvSize) { *pdwRecvSize = 0; }
+    }
+    return true;
+}
+
+// Read + decrypt a .conf.dpapi via the SYSTEM service pipe (op 3).
+// Returns true; caller must delete[] *ppPlaintext.
+static bool _SvcReadDecrypted(PCWSTR wszPath, BYTE** ppPlaintext, DWORD* pdwSize)
+{
+    return _SvcPipeOp(3, wszPath, nullptr, 0, ppPlaintext, pdwSize);
+}
+
+// Write plaintext bytes as a .conf file via the SYSTEM service pipe (op 5).
+static bool _SvcWriteConf(PCWSTR wszPath, const BYTE* pData, DWORD dwSize)
+{
+    return _SvcPipeOp(5, wszPath, pData, dwSize, nullptr, nullptr);
+}
+
+// Delete a file (.conf or .conf.dpapi) via the SYSTEM service pipe (op 6).
+static bool _SvcDeleteFile(PCWSTR wszPath)
+{
+    return _SvcPipeOp(6, wszPath, nullptr, 0, nullptr, nullptr);
+}
+
 void WireGuardTrayApp::_EditProfile(int profileIndex)
 {
     if (profileIndex < 0 || profileIndex >= _nProfiles) return;
@@ -2336,73 +2419,41 @@ void WireGuardTrayApp::_EditProfile(int profileIndex)
     StringCchPrintfW(wszDpapiPath, MAX_PATH_WGCP, L"%s%s%s",
                      wszConfigDir, pwszProfile, WG_CONFIG_EXT);
 
-    // --- Read the .conf.dpapi file ---
-    HANDLE hFile = CreateFileW(wszDpapiPath, GENERIC_READ, FILE_SHARE_READ,
-                               nullptr, OPEN_EXISTING, 0, nullptr);
-    if (hFile == INVALID_HANDLE_VALUE)
+    // --- Read + decrypt via ShutdownHelper service (op 3: READ_DECRYPTED) ---
+    // Config files are SYSTEM-only ACL; DPAPI LOCAL_MACHINE blobs also require
+    // elevated/SYSTEM context to decrypt. Both are handled by the service pipe.
+    BYTE* pbPlain = nullptr;
+    DWORD dwPlainLen = 0;
+    if (!_SvcReadDecrypted(wszDpapiPath, &pbPlain, &dwPlainLen))
     {
-        MessageBoxW(_hWnd,
-            T(L"Konfigurationsdatei konnte nicht ge\u00F6ffnet werden.",
-              L"Configuration file could not be opened."),
+        DWORD dwErr = GetLastError();
+        WCHAR wszErrMsg[MAX_PATH_WGCP + 256] = {};
+        StringCchPrintfW(wszErrMsg, ARRAYSIZE(wszErrMsg),
+            T(L"Konfigurationsdatei konnte nicht ge\u00F6ffnet werden.\r\n"
+              L"Pfad: %s\r\nFehler: %lu\r\n\r\n"
+              L"Stellen Sie sicher, dass der WireGuard Shutdown Helper-Dienst l\u00E4uft.",
+              L"Configuration file could not be opened.\r\n"
+              L"Path: %s\r\nError: %lu\r\n\r\n"
+              L"Make sure the WireGuard Shutdown Helper service is running."),
+            wszDpapiPath, dwErr);
+        MessageBoxW(_hWnd, wszErrMsg,
             T(L"Fehler", L"Error"), MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
         return;
     }
 
-    DWORD dwFileSize = GetFileSize(hFile, nullptr);
-    BYTE* pbEncrypted = new(std::nothrow) BYTE[dwFileSize];
-    if (!pbEncrypted) { CloseHandle(hFile); return; }
-
-    DWORD dwRead = 0;
-    if (!ReadFile(hFile, pbEncrypted, dwFileSize, &dwRead, nullptr) || dwRead != dwFileSize)
-    {
-        delete[] pbEncrypted;
-        CloseHandle(hFile);
-        MessageBoxW(_hWnd,
-            T(L"Konfigurationsdatei konnte nicht gelesen werden.",
-              L"Configuration file could not be read."),
-            T(L"Fehler", L"Error"), MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
-        return;
-    }
-    CloseHandle(hFile);
-
-    // --- DPAPI decrypt ---
-    // WireGuard uses CryptProtectData(CRYPTPROTECT_LOCAL_MACHINE|CRYPTPROTECT_UI_FORBIDDEN)
-    // so the blob is machine-scoped: any Administrator can decrypt without impersonation.
-    // NOTE: CryptUnprotectData does NOT accept CRYPTPROTECT_LOCAL_MACHINE as a flag
-    //       (MSDN: only CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_VERIFY_PROTECTION).
-    //       Passing it caused the original NTE_BAD_FLAGS (0x8009000B) error.
-    DATA_BLOB blobIn  = { dwRead, pbEncrypted };
-    DATA_BLOB blobOut = { 0, nullptr };
-    BOOL bDecOk = CryptUnprotectData(&blobIn, nullptr, nullptr,
-                                      nullptr, nullptr,
-                                      CRYPTPROTECT_UI_FORBIDDEN, &blobOut);
-    DWORD dwDecErr = GetLastError();
-    delete[] pbEncrypted;
-    if (!bDecOk)
-    {
-        WCHAR wszErr[128] = {};
-        StringCchPrintfW(wszErr, ARRAYSIZE(wszErr),
-            T(L"Entschl\u00FCsselung fehlgeschlagen (Fehler %lu).",
-              L"Decryption failed (error %lu)."),
-            dwDecErr);
-        MessageBoxW(_hWnd, wszErr, T(L"Fehler", L"Error"),
-                    MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
-        return;
-    }
-
-    // Convert decrypted bytes (UTF-8) to wide string for the editor
+    // Convert decrypted UTF-8 bytes to wide string for the editor
     int cchWide = MultiByteToWideChar(CP_UTF8, 0,
-                                      reinterpret_cast<LPCSTR>(blobOut.pbData),
-                                      static_cast<int>(blobOut.cbData),
+                                      reinterpret_cast<LPCSTR>(pbPlain),
+                                      static_cast<int>(dwPlainLen),
                                       nullptr, 0);
     WCHAR* pwszConf = new(std::nothrow) WCHAR[cchWide + 1];
-    if (!pwszConf) { LocalFree(blobOut.pbData); return; }
+    if (!pwszConf) { delete[] pbPlain; return; }
     MultiByteToWideChar(CP_UTF8, 0,
-                        reinterpret_cast<LPCSTR>(blobOut.pbData),
-                        static_cast<int>(blobOut.cbData),
+                        reinterpret_cast<LPCSTR>(pbPlain),
+                        static_cast<int>(dwPlainLen),
                         pwszConf, cchWide);
     pwszConf[cchWide] = L'\0';
-    LocalFree(blobOut.pbData);
+    delete[] pbPlain;
 
     // Normalise line endings to CRLF for the EDIT control.
     // 1) Strip bare \r (collapse \r\n -> \n, leave bare \n as-is)
@@ -2628,63 +2679,61 @@ void WireGuardTrayApp::_EditProfile(int profileIndex)
     if (!pUtf8) { delete[] dlgData.pwszResult; return; }
     WideCharToMultiByte(CP_UTF8, 0, dlgData.pwszResult, -1, pUtf8, cbUtf8, nullptr, nullptr);
     delete[] dlgData.pwszResult;
-    cbUtf8--;  // exclude null terminator from encryption
+    cbUtf8--;  // exclude null terminator
 
-    // --- DPAPI re-encrypt ---
-    // Use the same flags WireGuard Manager uses: CRYPTPROTECT_LOCAL_MACHINE so
-    // the WireGuard tunnel service (LocalSystem) can decrypt on this machine.
-    DATA_BLOB blobPlain  = { static_cast<DWORD>(cbUtf8),
-                             reinterpret_cast<BYTE*>(pUtf8) };
-    DATA_BLOB blobCipher = { 0, nullptr };
-    BOOL bEncOk = CryptProtectData(&blobPlain, nullptr, nullptr,
-                                    nullptr, nullptr,
-                                    CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN,
-                                    &blobCipher);
-    DWORD dwEncErr = GetLastError();
+    // --- Save via WireGuard's own import mechanism ---
+    // Strategy: write plaintext .conf → delete .conf.dpapi → let WireGuard
+    // encrypt it via /installtunnelservice → immediately /uninstalltunnelservice
+    // → clean up .conf. WireGuard's encryption is guaranteed compatible.
+    WCHAR wszConfPath[MAX_PATH_WGCP] = {};
+    StringCchPrintfW(wszConfPath, MAX_PATH_WGCP, L"%s%s.conf", wszConfigDir, pwszProfile);
+
+    // 1. Write plaintext .conf (via service pipe, SYSTEM writes to the protected dir)
+    bool bConfOk = _SvcWriteConf(wszConfPath,
+                                  reinterpret_cast<BYTE*>(pUtf8),
+                                  static_cast<DWORD>(cbUtf8));
     delete[] pUtf8;
-    if (!bEncOk)
+    if (!bConfOk)
     {
+        DWORD e = GetLastError();
         WCHAR wszErr[128] = {};
         StringCchPrintfW(wszErr, ARRAYSIZE(wszErr),
-            T(L"Verschl\u00FCsselung fehlgeschlagen (Fehler %lu).",
-              L"Encryption failed (error %lu)."),
-            dwEncErr);
+            T(L"Speichern fehlgeschlagen – .conf konnte nicht geschrieben werden (Fehler %lu).",
+              L"Save failed – .conf could not be written (error %lu)."), e);
         MessageBoxW(_hWnd, wszErr, T(L"Fehler", L"Error"),
                     MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
         if (bWasConnected) _Connect(_nSelectedProfile);
         return;
     }
 
-    // --- Write back to .conf.dpapi (atomic: write to temp, then MoveFileEx) ---
-    WCHAR wszTmpPath[MAX_PATH_WGCP] = {};
-    StringCchPrintfW(wszTmpPath, MAX_PATH_WGCP, L"%s.tmp", wszDpapiPath);
+    // 2. Delete old .conf.dpapi (service pipe)
+    _SvcDeleteFile(wszDpapiPath);  // ignore error – may already be gone
 
-    HANDLE hOut = CreateFileW(wszTmpPath, GENERIC_WRITE, 0, nullptr,
-                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    bool bWriteOk = false;
-    if (hOut != INVALID_HANDLE_VALUE)
+    // 3. Encrypt via WireGuardManager – identical to import flow:
+    //    enables service (was DISABLED), starts it, polls for .conf.dpapi,
+    //    stops and disables it again. Manager also removes the plain .conf.
+    bool bEncrypted = _EncryptProfileViaMgr(wszConfPath, pwszProfile);
+    if (!bEncrypted)
     {
-        DWORD dwWritten = 0;
-        bWriteOk = WriteFile(hOut, blobCipher.pbData, blobCipher.cbData,
-                             &dwWritten, nullptr) && dwWritten == blobCipher.cbData;
-        CloseHandle(hOut);
-        if (bWriteOk)
-            bWriteOk = MoveFileExW(wszTmpPath, wszDpapiPath,
-                                   MOVEFILE_REPLACE_EXISTING) != FALSE;
-        if (!bWriteOk)
-            DeleteFileW(wszTmpPath);
-    }
-    LocalFree(blobCipher.pbData);
-
-    if (!bWriteOk)
-    {
+        // Plaintext .conf is still there – clean it up via service pipe
+        _SvcDeleteFile(wszConfPath);
         MessageBoxW(_hWnd,
-            T(L"Die Konfigurationsdatei konnte nicht gespeichert werden.",
-              L"The configuration file could not be saved."),
-            T(L"Fehler", L"Error"), MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
+            T(L"Profil wurde geschrieben, konnte aber nicht verschlüsselt werden.\n"
+              L"Bitte prüfen Sie den WireGuardManager-Dienst.",
+              L"Profile was written but could not be encrypted.\n"
+              L"Please check the WireGuardManager service."),
+            T(L"Fehler", L"Error"), MB_ICONWARNING | MB_OK | MB_SETFOREGROUND);
         if (bWasConnected) _Connect(_nSelectedProfile);
         return;
     }
+
+    // Manager removes the plain .conf itself; belt-and-suspenders cleanup:
+    _SvcDeleteFile(wszConfPath);
+
+    // 4. Reload profile list
+    _LoadProfiles();
+    _RefreshStatus();
+    _UpdateTrayIcon();
 
     MessageBoxW(_hWnd,
         T(L"Profil erfolgreich gespeichert.", L"Profile saved successfully."),
