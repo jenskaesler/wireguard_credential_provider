@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
 [![Language](https://img.shields.io/badge/Language-C%2B%2B17-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-2026.9.2-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-2026.9.9-blue)](CHANGELOG.md)
 [![WireGuard](https://img.shields.io/badge/WireGuard-Windows-88171A?logo=wireguard&logoColor=white)](https://www.wireguard.com/install/)
 
 ---
@@ -57,8 +57,10 @@ Authentication flow:
 - 🔒 **WireGuard UI blocker** – detects and silently terminates the WireGuard UI
 - 🔄 **Shortcut watchdog** – automatically removes the WireGuard Start Menu shortcut after updates
 - 📥 **Profile import** – imports `.conf` files, triggers WireGuardManager briefly to encrypt to `.conf.dpapi`, then removes the plain-text file; tray menu refreshes immediately after import
+- ✏️ **Profile editor** – edit any profile directly from the tray submenu; decrypts `.conf.dpapi` via the SYSTEM helper service, opens an embedded text editor, re-encrypts via WireGuardManager on save (same flow as import, guaranteed compatibility)
+- 💾 **Profile export** – export any profile to a plain-text `.conf` file via Save dialog; decryption handled by the SYSTEM helper service
 - 🌍 **Bilingual** – German and English UI based on the Windows system locale
-- 🌙 **Dark Mode aware** – reads Windows theme preference and applies it to menus
+- 🌙 **Dark Mode** – full dark mode support for context menus and submenus (comctl32 v6, `AllowDarkModeForWindow`, `WH_CALLWNDPROC` hook)
 - 🪪 **YubiKey PIV** – same authentication gate as the pre-logon tile
 - 🔌 **Auto-disconnect** – disconnects tunnel when YubiKey is removed
 - 🤝 **Handshake watchdog** – disconnects if WireGuard handshake exceeds configurable timeout (default: 180 s); suppressed on corporate network where no handshake is expected
