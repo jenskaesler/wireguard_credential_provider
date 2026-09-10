@@ -61,11 +61,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
             GetProcAddress(hUxTheme, MAKEINTRESOURCEA(136)));
         if (pfnFlush) pfnFlush();
 
-        // Ordinal 133 = AllowDarkModeForApp (older API, kept for compatibility)
-        typedef bool (WINAPI* fnAllowDarkModeForApp)(bool);
-        auto pfnAllow = reinterpret_cast<fnAllowDarkModeForApp>(
-            GetProcAddress(hUxTheme, MAKEINTRESOURCEA(133)));
-        if (pfnAllow) pfnAllow(bDarkMode);
+        // Ordinal 104 = RefreshImmersiveColorPolicyState – flush after mode change
+        typedef void (WINAPI* fnRefreshImmersive)();
+        auto pfnRefresh = reinterpret_cast<fnRefreshImmersive>(
+            GetProcAddress(hUxTheme, MAKEINTRESOURCEA(104)));
+        if (pfnRefresh) pfnRefresh();
 
         FreeLibrary(hUxTheme);
     }

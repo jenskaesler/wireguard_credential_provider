@@ -137,6 +137,22 @@ bool WireGuardTrayApp::Init(HINSTANCE hInst)
         return false;
     }
 
+    // AllowDarkModeForWindow must be called with the real HWND after creation.
+    // Ordinal 133 = AllowDarkModeForWindow(HWND, BOOL) – Win10 1809+
+    // This is the per-window opt-in that makes TrackPopupMenu honour the
+    // system dark-mode setting when SetPreferredAppMode(AllowDark) is active.
+    {
+        HMODULE hUx = GetModuleHandleW(L"uxtheme.dll");
+        if (!hUx) hUx = LoadLibraryW(L"uxtheme.dll");
+        if (hUx)
+        {
+            typedef BOOL (WINAPI* fnAllowDarkModeForWindow)(HWND, BOOL);
+            auto pfn = reinterpret_cast<fnAllowDarkModeForWindow>(
+                GetProcAddress(hUx, MAKEINTRESOURCEA(133)));
+            if (pfn) pfn(_hWnd, TRUE);
+        }
+    }
+
     _RefreshStatus();
     _AddTrayIcon();
     SetTimer(_hWnd, TIMER_REFRESH_ID, TIMER_REFRESH_MS, nullptr);
