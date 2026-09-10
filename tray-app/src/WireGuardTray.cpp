@@ -431,6 +431,154 @@ void WireGuardTrayApp::_UpdateTrayTooltip()
     }
 }
 
+// ===========================================================================
+// Menu icon system
+//
+// Creates 16x16 ARGB bitmaps using Segoe MDL2 Assets glyphs + solid colors.
+// Bitmaps are cached for process lifetime (created once, never freed).
+// ===========================================================================
+
+enum class MI : int {
+    GreenDot=0, RedDot, GrayDot,
+    Connect, Disconnect, Switch,
+    Check, Edit, Export, Delete,
+    Import, ConfigFolder,
+    YubiKey, YubiKeyMissing,
+    Refresh, About, Exit, Lock,
+    _N
+};
+
+static HBITMAP _MakeMenuDot(COLORREF clr)
+{
+    const int S = 16;
+    BITMAPINFO bi = {}; bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = S; bi.bmiHeader.biHeight = -S;
+    bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    DWORD* p = nullptr;
+    HBITMAP hbm = CreateDIBSection(nullptr, &bi, DIB_RGB_COLORS,
+                                    reinterpret_cast<void**>(&p), nullptr, 0);
+    if (!hbm) return nullptr;
+    memset(p, 0, S * S * 4);
+    BYTE R = GetRValue(clr), G = GetGValue(clr), B = GetBValue(clr);
+    DWORD col = 0xFF000000u | (DWORD(R) << 16) | (DWORD(G) << 8) | B;
+    const int CX = 8, CY = 8, RAD = 5;
+    for (int y = 0; y < S; y++)
+        for (int x = 0; x < S; x++)
+            if ((x-CX)*(x-CX) + (y-CY)*(y-CY) <= RAD*RAD)
+                p[y*S+x] = col;
+    return hbm;
+}
+
+static HBITMAP _MakeMenuGlyph(WCHAR wch, COLORREF clr)
+{
+    const int S = 16;
+    BITMAPINFO bi = {}; bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = S; bi.bmiHeader.biHeight = -S;
+    bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    DWORD* p = nullptr;
+    HBITMAP hbm = CreateDIBSection(nullptr, &bi, DIB_RGB_COLORS,
+                                    reinterpret_cast<void**>(&p), nullptr, 0);
+    if (!hbm) return nullptr;
+    memset(p, 0, S * S * 4);
+    HDC hdc = CreateCompatibleDC(nullptr);
+    HBITMAP hOld = static_cast<HBITMAP>(SelectObject(hdc, hbm));
+    RECT rc = {0,0,S,S};
+    FillRect(hdc, &rc, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    HFONT hf = CreateFontW(-13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe MDL2 Assets");
+    HFONT hfOld = static_cast<HFONT>(SelectObject(hdc, hf));
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(0xFF, 0xFF, 0xFF));
+    RECT rcT = {0, 1, S, S};
+    WCHAR sz[2] = {wch, 0};
+    DrawTextW(hdc, sz, 1, &rcT, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, hfOld);
+    DeleteObject(hf);
+    SelectObject(hdc, hOld);
+    DeleteDC(hdc);
+    BYTE R = GetRValue(clr), G = GetGValue(clr), B = GetBValue(clr);
+    for (int i = 0; i < S*S; i++) {
+        BYTE bri = static_cast<BYTE>((p[i] >> 16) & 0xFF);
+        if (bri == 0) { p[i] = 0; continue; }
+        float f = bri / 255.f;
+        p[i] = (DWORD(bri) << 24)
+             | (DWORD(static_cast<BYTE>(R * f)) << 16)
+             | (DWORD(static_cast<BYTE>(G * f)) <<  8)
+             |  DWORD(static_cast<BYTE>(B * f));
+    }
+    return hbm;
+}
+
+static HBITMAP _GetMenuIcon(MI icon)
+{
+    struct { WCHAR ch; COLORREF clr; } tbl[] = {
+        { 0,      RGB(0x16,0xA3,0x4A) }, // GreenDot
+        { 0,      RGB(0xDC,0x26,0x26) }, // RedDot
+        { 0,      RGB(0x9C,0xA3,0xAF) }, // GrayDot
+        { 0xE768, RGB(0x16,0xA3,0x4A) }, // Connect     - green play
+        { 0xE71A, RGB(0xDC,0x26,0x26) }, // Disconnect  - red
+        { 0xE8AB, RGB(0x25,0x63,0xEB) }, // Switch      - blue
+        { 0xE10B, RGB(0x25,0x63,0xEB) }, // Check       - blue
+        { 0xE70F, RGB(0x25,0x63,0xEB) }, // Edit        - blue pencil
+        { 0xE898, RGB(0x25,0x63,0xEB) }, // Export      - blue save
+        { 0xE74D, RGB(0xDC,0x26,0x26) }, // Delete      - red trash
+        { 0xE8B7, RGB(0xD9,0x77,0x06) }, // Import      - amber folder
+        { 0xE8DA, RGB(0xD9,0x77,0x06) }, // ConfigFolder- amber folder
+        { 0xE72E, RGB(0xD9,0x77,0x06) }, // YubiKey     - amber lock
+        { 0xE72E, RGB(0x9C,0xA3,0xAF) }, // YubiKeyMiss - gray lock
+        { 0xE72C, RGB(0x25,0x63,0xEB) }, // Refresh     - blue
+        { 0xE946, RGB(0x25,0x63,0xEB) }, // About       - blue info
+        { 0xE711, RGB(0xDC,0x26,0x26) }, // Exit        - red X
+        { 0xE72E, RGB(0x6B,0x72,0x80) }, // Lock        - gray padlock
+    };
+    static_assert(static_cast<int>(MI::_N) == ARRAYSIZE(tbl), "MI table mismatch");
+    static HBITMAP s_bmp[static_cast<int>(MI::_N)] = {};
+    int idx = static_cast<int>(icon);
+    if (idx < 0 || idx >= static_cast<int>(MI::_N)) return nullptr;
+    if (!s_bmp[idx])
+        s_bmp[idx] = (tbl[idx].ch == 0)
+            ? _MakeMenuDot(tbl[idx].clr)
+            : _MakeMenuGlyph(tbl[idx].ch, tbl[idx].clr);
+    return s_bmp[idx];
+}
+
+static void _MAI(HMENU h, UINT st, UINT_PTR id, LPCWSTR txt, MI icon)
+{
+    MENUITEMINFOW m = { sizeof(m) };
+    m.fMask = MIIM_FTYPE | MIIM_STATE | MIIM_ID | MIIM_STRING | MIIM_BITMAP;
+    m.fType = MFT_STRING; m.fState = st;
+    m.wID   = static_cast<UINT>(id);
+    m.dwTypeData = const_cast<LPWSTR>(txt);
+    m.hbmpItem   = _GetMenuIcon(icon);
+    InsertMenuItemW(h, GetMenuItemCount(h), TRUE, &m);
+}
+static void _MA(HMENU h, UINT st, UINT_PTR id, LPCWSTR txt)
+{
+    MENUITEMINFOW m = { sizeof(m) };
+    m.fMask = MIIM_FTYPE | MIIM_STATE | MIIM_ID | MIIM_STRING;
+    m.fType = MFT_STRING; m.fState = st;
+    m.wID   = static_cast<UINT>(id);
+    m.dwTypeData = const_cast<LPWSTR>(txt);
+    InsertMenuItemW(h, GetMenuItemCount(h), TRUE, &m);
+}
+static void _MS(HMENU h)
+{
+    MENUITEMINFOW m = { sizeof(m), MIIM_FTYPE, MFT_SEPARATOR };
+    InsertMenuItemW(h, GetMenuItemCount(h), TRUE, &m);
+}
+static void _MPI(HMENU h, UINT st, HMENU hSub, LPCWSTR txt, MI icon)
+{
+    MENUITEMINFOW m = { sizeof(m) };
+    m.fMask = MIIM_FTYPE | MIIM_STATE | MIIM_SUBMENU | MIIM_STRING | MIIM_BITMAP;
+    m.fType = MFT_STRING; m.fState = st; m.hSubMenu = hSub;
+    m.dwTypeData = const_cast<LPWSTR>(txt);
+    m.hbmpItem   = _GetMenuIcon(icon);
+    InsertMenuItemW(h, GetMenuItemCount(h), TRUE, &m);
+}
+
 // ---------------------------------------------------------------------------
 // Context menu
 // ---------------------------------------------------------------------------
@@ -439,86 +587,63 @@ void WireGuardTrayApp::_ShowContextMenu()
     HMENU hMenu = CreatePopupMenu();
     if (!hMenu) return;
 
-    // -----------------------------------------------------------------------
     // Header: App-Name (ausgegraut)
-    // -----------------------------------------------------------------------
-    AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0,
-        L"\U0001F512  WireGuard VPN");
+    _MAI(hMenu, MFS_GRAYED, 0, L"WireGuard VPN", MI::Lock);
 
-    // -----------------------------------------------------------------------
-    // Status-Zeile: Verbindungsstatus + Profilname + ggf. Laufzeit
-    // -----------------------------------------------------------------------
+    // Status-Zeile
     {
         WCHAR wszStatus[MAX_PATH_WGCP + 128] = {};
+        MI    statusIcon = MI::GrayDot;
         if (_nProfiles > 0)
         {
             if (_bConnected)
             {
+                statusIcon = MI::GreenDot;
                 WCHAR wszTimer[MAX_LABEL_WGCP] = {};
                 WGGetConnectedSince(_rgProfiles[_nSelectedProfile], wszTimer, MAX_LABEL_WGCP);
-                if (wszTimer[0])
-                    StringCchPrintfW(wszStatus, ARRAYSIZE(wszStatus),
-                        T(L"\U0001F7E2 Verbunden  \u2013  %s", L"\U0001F7E2 Connected  \u2013  %s"),
-                        wszTimer);
-                else
-                    StringCchPrintfW(wszStatus, ARRAYSIZE(wszStatus),
-                        T(L"\U0001F7E2 Verbunden  \u2013  %s", L"\U0001F7E2 Connected  \u2013  %s"),
-                        _rgProfiles[_nSelectedProfile]);
+                StringCchPrintfW(wszStatus, ARRAYSIZE(wszStatus),
+                    T(L"Verbunden  –  %s", L"Connected  –  %s"),
+                    wszTimer[0] ? wszTimer : _rgProfiles[_nSelectedProfile]);
             }
             else
             {
+                statusIcon = MI::RedDot;
                 StringCchPrintfW(wszStatus, ARRAYSIZE(wszStatus),
-                    T(L"\U0001F534 Getrennt  \u2013  %s", L"\U0001F534 Disconnected  \u2013  %s"),
+                    T(L"Getrennt  –  %s", L"Disconnected  –  %s"),
                     _rgProfiles[_nSelectedProfile]);
             }
         }
         else
         {
             StringCchCopyW(wszStatus, ARRAYSIZE(wszStatus),
-                T(L"\u26A0  Kein Profil vorhanden", L"\u26A0  No profile configured"));
+                T(L"Kein Profil vorhanden", L"No profile configured"));
         }
-        AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0, wszStatus);
+        _MAI(hMenu, MFS_GRAYED, 0, wszStatus, statusIcon);
     }
-    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    _MS(hMenu);
 
-    // -----------------------------------------------------------------------
-    // Haupt-Aktion: Verbinden / Trennen – mit Profilname damit klar ist was passiert
-    // -----------------------------------------------------------------------
+    // Haupt-Aktion: Verbinden / Trennen
     if (_nProfiles > 0)
     {
+        WCHAR wszLabel[MAX_PATH_WGCP + 32] = {};
         if (_bConnected)
         {
-            // Profilname im Label: Nutzer sieht WAS getrennt wird
-            WCHAR wszLabel[MAX_PATH_WGCP + 32] = {};
             StringCchPrintfW(wszLabel, ARRAYSIZE(wszLabel),
-                T(L"\u23F9  VPN trennen  \u2013  %s", L"\u23F9  Disconnect VPN  \u2013  %s"),
+                T(L"VPN trennen  –  %s", L"Disconnect VPN  –  %s"),
                 _rgProfiles[_nSelectedProfile]);
-            AppendMenuW(hMenu, MF_STRING, IDM_DISCONNECT, wszLabel);
+            _MAI(hMenu, MFS_ENABLED, IDM_DISCONNECT, wszLabel, MI::Disconnect);
         }
         else
         {
-            WCHAR wszLabel[MAX_PATH_WGCP + 32] = {};
             StringCchPrintfW(wszLabel, ARRAYSIZE(wszLabel),
-                T(L"\u25B6  VPN verbinden  \u2013  %s", L"\u25B6  Connect VPN  \u2013  %s"),
+                T(L"VPN verbinden  –  %s", L"Connect VPN  –  %s"),
                 _rgProfiles[_nSelectedProfile]);
-            AppendMenuW(hMenu, MF_STRING, IDM_CONNECT, wszLabel);
+            _MAI(hMenu, MFS_ENABLED, IDM_CONNECT, wszLabel, MI::Connect);
         }
-        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+        _MS(hMenu);
     }
 
-    // -----------------------------------------------------------------------
     // Profil-Liste
-    //
-    // Jedes Profil ist ein MF_POPUP-Eintrag. Das Submenu zeigt kontextsensitiv:
-    //   Verbundenes Profil:    [Trennen | -- | Loeschen (grayed)]
-    //   Anderes Profil (frei): [Verbinden | Als Standard | -- | Loeschen]
-    //   Anderes Profil (busy): [Wechseln zu X | Als Standard | -- | Loeschen]
-    //
-    // Löschen ist nur gesperrt wenn dieses Profil GERADE VERBUNDEN ist.
-    // Ausgewähltes-aber-getrenntes Profil kann gelöscht werden.
-    //
-    // Parent-Eintrag: MF_CHECKED wenn ausgewählt, grüner Punkt wenn verbunden.
-    // -----------------------------------------------------------------------
     for (int i = 0; i < _nProfiles; i++)
     {
         bool bIsSelected     = (i == _nSelectedProfile);
@@ -528,111 +653,78 @@ void WireGuardTrayApp::_ShowContextMenu()
         HMENU hSub = CreatePopupMenu();
         if (!hSub) { LOG_WARN(L"Menu: CreatePopupMenu for profile submenu failed"); continue; }
 
-        // --- Submenu-Eintrag: Verbinden / Trennen / Wechseln ---
         if (bIsConnected)
         {
-            AppendMenuW(hSub, MF_STRING, IDM_DISCONNECT,
-                T(L"\u23F9  Trennen", L"\u23F9  Disconnect"));
+            _MAI(hSub, MFS_ENABLED, IDM_DISCONNECT,
+                 T(L"Trennen", L"Disconnect"), MI::Disconnect);
         }
         else if (bOtherConnected)
         {
-            // Anderes Profil ist aktiv -> direkter Wechsel anbieten
             WCHAR wszSwitch[MAX_PATH_WGCP + 32] = {};
             StringCchPrintfW(wszSwitch, ARRAYSIZE(wszSwitch),
-                T(L"\u21C4  Wechseln zu %s", L"\u21C4  Switch to %s"),
-                _rgProfiles[i]);
-            AppendMenuW(hSub, MF_STRING,
-                static_cast<UINT_PTR>(IDM_PROFILE_SWITCH_BASE + i), wszSwitch);
+                T(L"Wechseln zu %s", L"Switch to %s"), _rgProfiles[i]);
+            _MAI(hSub, MFS_ENABLED,
+                 static_cast<UINT_PTR>(IDM_PROFILE_SWITCH_BASE + i),
+                 wszSwitch, MI::Switch);
         }
         else
         {
-            // Nichts verbunden – direkt verbinden
-            AppendMenuW(hSub, MF_STRING,
-                static_cast<UINT_PTR>(IDM_PROFILE_CONNECT_BASE + i),
-                T(L"\u25B6  Verbinden", L"\u25B6  Connect"));
+            _MAI(hSub, MFS_ENABLED,
+                 static_cast<UINT_PTR>(IDM_PROFILE_CONNECT_BASE + i),
+                 T(L"Verbinden", L"Connect"), MI::Connect);
         }
 
-        // --- Submenu-Eintrag: Als Standard auswaehlen (nur wenn nicht bereits aktiv) ---
         if (!bIsSelected)
         {
-            AppendMenuW(hSub, MF_STRING,
-                static_cast<UINT_PTR>(IDM_PROFILE_SELECT_BASE + i),
-                T(L"\u2714  Als Standard ausw\u00E4hlen",
-                  L"\u2714  Set as default"));
+            _MAI(hSub, MFS_ENABLED,
+                 static_cast<UINT_PTR>(IDM_PROFILE_SELECT_BASE + i),
+                 T(L"Als Standard auswählen", L"Set as default"),
+                 MI::Check);
         }
 
-        AppendMenuW(hSub, MF_SEPARATOR, 0, nullptr);
+        _MS(hSub);
+        _MAI(hSub, MFS_ENABLED,
+             static_cast<UINT_PTR>(IDM_PROFILE_EDIT_BASE + i),
+             T(L"Bearbeiten...", L"Edit..."), MI::Edit);
+        _MAI(hSub, MFS_ENABLED,
+             static_cast<UINT_PTR>(IDM_PROFILE_EXPORT_BASE + i),
+             T(L"Exportieren...", L"Export..."), MI::Export);
+        _MAI(hSub, bIsConnected ? MFS_GRAYED : MFS_ENABLED,
+             static_cast<UINT_PTR>(IDM_PROFILE_DELETE_BASE + i),
+             T(L"Löschen", L"Delete"), MI::Delete);
 
-                // --- Submenu-Eintrag: Bearbeiten ---
-        AppendMenuW(hSub, MF_STRING,
-            static_cast<UINT_PTR>(IDM_PROFILE_EDIT_BASE + i),
-            T(L"\u270F  Bearbeiten...", L"\u270F  Edit..."));
-
-        // --- Submenu-Eintrag: Exportieren ---
-        AppendMenuW(hSub, MF_STRING,
-            static_cast<UINT_PTR>(IDM_PROFILE_EXPORT_BASE + i),
-            T(L"\U0001F4BE  Exportieren...", L"\U0001F4BE  Export..."));
-
-// --- Submenu-Eintrag: Loeschen (nur gesperrt wenn gerade verbunden) ---
-        UINT uDelFlags = MF_STRING;
-        if (bIsConnected) uDelFlags |= MF_GRAYED;  // erst trennen, dann loeschen
-        AppendMenuW(hSub, uDelFlags,
-            static_cast<UINT_PTR>(IDM_PROFILE_DELETE_BASE + i),
-            T(L"\U0001F5D1  L\u00F6schen", L"\U0001F5D1  Delete"));
-
-        // --- Parent-Eintrag: Profilname ---
-        // Grüner Punkt wenn verbunden, Pfeil wenn ausgewählt (aber nicht verbunden), sonst Abstand
-        WCHAR wszProfEntry[MAX_PATH_WGCP + 8] = {};
-        if (bIsConnected)
-            StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry), L"\U0001F7E2 %s", _rgProfiles[i]);
-        else if (bIsSelected)
-            StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry), L"\u25B8  %s", _rgProfiles[i]);
-        else
-            StringCchPrintfW(wszProfEntry, ARRAYSIZE(wszProfEntry), L"    %s", _rgProfiles[i]);
-
-        UINT uFlags = MF_POPUP;
-        if (bIsSelected) uFlags |= MF_CHECKED;
-
-        AppendMenuW(hMenu, uFlags, reinterpret_cast<UINT_PTR>(hSub), wszProfEntry);
+        MI parentIcon = bIsConnected ? MI::GreenDot : MI::GrayDot;
+        UINT parentState = bIsSelected ? MFS_CHECKED : MFS_ENABLED;
+        _MPI(hMenu, parentState, hSub, _rgProfiles[i], parentIcon);
     }
 
-    if (_nProfiles > 0 || _scConfig.bEnabled)
-        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    if (_nProfiles > 0 || _scConfig.bEnabled) _MS(hMenu);
 
-    // -----------------------------------------------------------------------
-    // YubiKey / Smartcard-Status (nur wenn aktiviert)
-    // Seriennummer wird im SC-Watcher-Thread gecacht – kein blockierender
-    // ykman-Aufruf beim Menueöffnen mehr.
-    // -----------------------------------------------------------------------
+    // YubiKey / Smartcard-Status
     if (_scConfig.bEnabled)
     {
         WCHAR wszReader[256] = {};
         bool bYkPresent = WGCPFindSmartcard(_scConfig, wszReader, 256);
-
         WCHAR wszYkLine[128] = {};
         if (bYkPresent)
         {
             if (_wszYkSerial[0])
                 StringCchPrintfW(wszYkLine, 128,
-                    T(L"\U0001F511  YubiKey verbunden  (S/N %s)",
-                      L"\U0001F511  YubiKey connected  (S/N %s)"),
+                    T(L"YubiKey verbunden  (S/N %s)", L"YubiKey connected  (S/N %s)"),
                     _wszYkSerial);
             else
                 StringCchCopyW(wszYkLine, 128,
-                    T(L"\U0001F511  YubiKey verbunden",
-                      L"\U0001F511  YubiKey connected"));
+                    T(L"YubiKey verbunden", L"YubiKey connected"));
         }
         else
         {
-            // Karte nicht mehr da: Serial-Cache leeren
             ZeroMemory(_wszYkSerial, sizeof(_wszYkSerial));
             StringCchCopyW(wszYkLine, 128,
-                T(L"\U0001F511  YubiKey nicht erkannt",
-                  L"\U0001F511  YubiKey not detected"));
+                T(L"YubiKey nicht erkannt", L"YubiKey not detected"));
         }
-        AppendMenuW(hMenu, MF_STRING | MF_GRAYED, 0, wszYkLine);
+        _MAI(hMenu, MFS_GRAYED, 0, wszYkLine,
+             bYkPresent ? MI::YubiKey : MI::YubiKeyMissing);
 
-        // YubiKey Manager / Authenticator oeffnen (gecachter Pfad oder einmalige Suche)
         if (!_wszYkMgrPath[0])
         {
             const WCHAR* apwszPaths[] = {
@@ -648,38 +740,31 @@ void WireGuardTrayApp::_ShowContextMenu()
             {
                 ExpandEnvironmentStringsW(pwszP, wszTry, MAX_PATH);
                 if (GetFileAttributesW(wszTry) != INVALID_FILE_ATTRIBUTES)
-                {
-                    StringCchCopyW(_wszYkMgrPath, MAX_PATH, wszTry);
-                    break;
-                }
+                { StringCchCopyW(_wszYkMgrPath, MAX_PATH, wszTry); break; }
             }
         }
         if (_wszYkMgrPath[0])
-            AppendMenuW(hMenu, MF_STRING, IDM_OPEN_YKMANAGER,
-                T(L"\U0001F511  Yubico Authenticator \u00F6ffnen...",
-                  L"\U0001F511  Open Yubico Authenticator..."));
-
-        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+            _MAI(hMenu, MFS_ENABLED, IDM_OPEN_YKMANAGER,
+                 T(L"Yubico Authenticator öffnen...",
+                   L"Open Yubico Authenticator..."),
+                 MI::YubiKey);
+        _MS(hMenu);
     }
 
-    // -----------------------------------------------------------------------
     // Profil-Verwaltung
-    // -----------------------------------------------------------------------
-    AppendMenuW(hMenu, MF_STRING, IDM_IMPORT,
-        T(L"\U0001F4C2  Profil importieren...",
-          L"\U0001F4C2  Import profile..."));
-    AppendMenuW(hMenu, MF_STRING, IDM_OPEN_CONFIG_DIR,
-        T(L"\U0001F4C1  Konfigurationsordner \u00F6ffnen...",
-          L"\U0001F4C1  Open config folder..."));
-
-    AppendMenuW(hMenu, (_bAutoUpdateCheck ? MF_CHECKED : MF_UNCHECKED) | MF_STRING,
+    _MAI(hMenu, MFS_ENABLED, IDM_IMPORT,
+         T(L"Profil importieren...", L"Import profile..."), MI::Import);
+    _MAI(hMenu, MFS_ENABLED, IDM_OPEN_CONFIG_DIR,
+         T(L"Konfigurationsordner öffnen...", L"Open config folder..."),
+         MI::ConfigFolder);
+    _MA(hMenu, (_bAutoUpdateCheck ? MFS_CHECKED : 0u) | MFS_ENABLED,
         IDM_UPDATE_CHECK,
-        T(L"\U0001F504  Auf Updates pr\u00FCfen", L"\U0001F504  Check for updates"));
-    AppendMenuW(hMenu, MF_STRING, IDM_ABOUT,
-        T(L"\u2139  Informationen...", L"\u2139  About..."));
-    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hMenu, MF_STRING, IDM_EXIT,
-        T(L"❌  Beenden", L"❌  Exit"));
+        T(L"Auf Updates prüfen", L"Check for updates"));
+    _MAI(hMenu, MFS_ENABLED, IDM_ABOUT,
+         T(L"Informationen...", L"About..."), MI::About);
+    _MS(hMenu);
+    _MAI(hMenu, MFS_ENABLED, IDM_EXIT,
+         T(L"Beenden", L"Exit"), MI::Exit);
 
     // -----------------------------------------------------------------------
     // Menue anzeigen
