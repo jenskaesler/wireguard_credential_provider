@@ -1012,6 +1012,82 @@ bool WireGuardTrayApp::_ShowPinDialog()
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Dark Mode helpers – shared by PIN dialog, About window, and Profile editor
+// ---------------------------------------------------------------------------
+static bool _IsDarkMode()
+{
+    DWORD dwLight = 1, dwSz = sizeof(dwLight);
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        RegQueryValueExW(hKey, L"AppsUseLightTheme", nullptr, nullptr,
+                         reinterpret_cast<LPBYTE>(&dwLight), &dwSz);
+        RegCloseKey(hKey);
+    }
+    return dwLight == 0;
+}
+
+static const COLORREF CLR_DM_BG   = RGB(32,  32,  32);
+static const COLORREF CLR_DM_EDIT = RGB(50,  50,  50);
+static const COLORREF CLR_DM_TEXT = RGB(220, 220, 220);
+
+static HBRUSH _DmBgBrush()
+{
+    static HBRUSH h = nullptr;
+    if (!h) h = CreateSolidBrush(CLR_DM_BG);
+    return h;
+}
+static HBRUSH _DmEditBrush()
+{
+    static HBRUSH h = nullptr;
+    if (!h) h = CreateSolidBrush(CLR_DM_EDIT);
+    return h;
+}
+
+// Call from WM_CTLCOLORSTATIC / WM_CTLCOLOREDIT in dark mode.
+// Returns the brush to return from the message handler (0 = not dark mode).
+static LRESULT _DmCtlColor(HDC hdc, bool bEdit = false)
+{
+    if (!_IsDarkMode()) return 0;
+    SetBkColor  (hdc, bEdit ? CLR_DM_EDIT : CLR_DM_BG);
+    SetTextColor(hdc, CLR_DM_TEXT);
+    return reinterpret_cast<LRESULT>(bEdit ? _DmEditBrush() : _DmBgBrush());
+}
+
+// Apply dark mode theme to a window and all its button children.
+static void _DmApplyToWindow(HWND hWnd)
+{
+    if (!_IsDarkMode()) return;
+    typedef BOOL (WINAPI* fnAdmfw)(HWND, BOOL);
+    HMODULE hUx = GetModuleHandleW(L"uxtheme.dll");
+    if (!hUx) hUx = LoadLibraryW(L"uxtheme.dll");
+    if (hUx)
+    {
+        auto pfnAdmfw = reinterpret_cast<fnAdmfw>(
+            GetProcAddress(hUx, MAKEINTRESOURCEA(133)));
+        if (pfnAdmfw) pfnAdmfw(hWnd, TRUE);
+    }
+    // Theme all button children so they render dark
+    typedef HRESULT (WINAPI* fnSwt)(HWND, LPCWSTR, LPCWSTR);
+    HMODULE hUx2 = GetModuleHandleW(L"uxtheme.dll");
+    auto pfnSwt = hUx2 ? reinterpret_cast<fnSwt>(GetProcAddress(hUx2, "SetWindowTheme")) : nullptr;
+    if (pfnSwt)
+    {
+        EnumChildWindows(hWnd, [](HWND hChild, LPARAM lp) -> BOOL {
+            WCHAR szCls[32] = {};
+            GetClassNameW(hChild, szCls, 32);
+            if (_wcsicmp(szCls, L"BUTTON") == 0)
+                reinterpret_cast<fnSwt>(reinterpret_cast<void*>(lp))(
+                    hChild, L"DarkMode_Explorer", nullptr);
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(reinterpret_cast<void*>(pfnSwt)));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // _PinDlgProc
 // ---------------------------------------------------------------------------
 INT_PTR CALLBACK WireGuardTrayApp::_PinDlgProc(HWND hDlg, UINT msg,
@@ -1122,8 +1198,28 @@ INT_PTR CALLBACK WireGuardTrayApp::_PinDlgProc(HWND hDlg, UINT msg,
         SendMessageW(hOK, WM_SETFONT, reinterpret_cast<WPARAM>(hFontUI), TRUE);
 
         SetFocus(hEdit);
+        _DmApplyToWindow(hDlg);
+        // Dark-theme the edit control too
+        if (_IsDarkMode())
+        {
+            typedef HRESULT (WINAPI* fnSwt)(HWND, LPCWSTR, LPCWSTR);
+            HMODULE hUxPin = GetModuleHandleW(L"uxtheme.dll");
+            auto pfnSwtPin = hUxPin ? reinterpret_cast<fnSwt>(GetProcAddress(hUxPin, "SetWindowTheme")) : nullptr;
+            if (pfnSwtPin) pfnSwtPin(GetDlgItem(hDlg, IDC_PIN_EDIT), L"DarkMode_Explorer", nullptr);
+        }
         return FALSE;
     }
+    case WM_ERASEBKGND:
+        if (_IsDarkMode())
+        {
+            RECT rc; GetClientRect(hDlg, &rc);
+            FillRect(reinterpret_cast<HDC>(wParam), &rc, _DmBgBrush());
+            return 1;
+        }
+        return FALSE;
+    case WM_CTLCOLOREDIT:
+        if (LRESULT lr = _DmCtlColor(reinterpret_cast<HDC>(wParam), true)) return lr;
+        return FALSE;
     case WM_CTLCOLORSTATIC:
     {
         // Dark blue header background for controls in header area
@@ -1131,7 +1227,7 @@ INT_PTR CALLBACK WireGuardTrayApp::_PinDlgProc(HWND hDlg, UINT msg,
         RECT rc; GetWindowRect(hCtrl, &rc);
         POINT pt = { rc.left, rc.top };
         ScreenToClient(hDlg, &pt);
-        if (pt.y < 46) // in header zone
+        if (pt.y < 46) // in header zone – always dark blue regardless of theme
         {
             HDC hdc = reinterpret_cast<HDC>(wParam);
             SetBkColor(hdc, RGB(0x1a, 0x3a, 0x5c));
@@ -1139,6 +1235,7 @@ INT_PTR CALLBACK WireGuardTrayApp::_PinDlgProc(HWND hDlg, UINT msg,
             static HBRUSH hBrHeader = CreateSolidBrush(RGB(0x1a, 0x3a, 0x5c));
             return reinterpret_cast<INT_PTR>(hBrHeader);
         }
+        if (LRESULT lr = _DmCtlColor(reinterpret_cast<HDC>(wParam))) return lr;
         return FALSE;
     }
     case WM_DRAWITEM:
@@ -2285,8 +2382,32 @@ static INT_PTR CALLBACK _EditDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM 
         if (hFont && hEdit)
             SendMessageW(hEdit, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
 
+        // Dark mode
+        _DmApplyToWindow(hDlg);
+        if (_IsDarkMode() && hEdit)
+        {
+            typedef HRESULT (WINAPI* fnSwt)(HWND, LPCWSTR, LPCWSTR);
+            HMODULE hUxEd = GetModuleHandleW(L"uxtheme.dll");
+            auto pfnSwtEd = hUxEd ? reinterpret_cast<fnSwt>(GetProcAddress(hUxEd, "SetWindowTheme")) : nullptr;
+            if (pfnSwtEd) pfnSwtEd(hEdit, L"DarkMode_Explorer", nullptr);
+        }
+
         return TRUE;
     }
+    case WM_ERASEBKGND:
+        if (_IsDarkMode())
+        {
+            RECT rc; GetClientRect(hDlg, &rc);
+            FillRect(reinterpret_cast<HDC>(wParam), &rc, _DmBgBrush());
+            return 1;
+        }
+        return FALSE;
+    case WM_CTLCOLOREDIT:
+        if (LRESULT lr = _DmCtlColor(reinterpret_cast<HDC>(wParam), true)) return lr;
+        return FALSE;
+    case WM_CTLCOLORSTATIC:
+        if (LRESULT lr = _DmCtlColor(reinterpret_cast<HDC>(wParam))) return lr;
+        return FALSE;
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK && s_pData)
         {
@@ -3254,7 +3375,8 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
         s_fonts.hNormal = CreateFontW(-MulDiv(10,dpi,72),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
                                        DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
                                        CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
-        s_hbrDialog = GetSysColorBrush(COLOR_BTNFACE);
+        s_hbrDialog = _IsDarkMode() ? _DmBgBrush() : GetSysColorBrush(COLOR_BTNFACE);
+        _DmApplyToWindow(hWnd);   // OK button + AllowDarkModeForWindow
 
         // Layout constants – all y values are client-area offsets
         // Header strip: y=0..56 (painted in WM_PAINT)
@@ -3387,8 +3509,24 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
     }
 
     // ------------------------------------------------------------------
+    case WM_ERASEBKGND:
+        if (_IsDarkMode())
+        {
+            RECT rc; GetClientRect(hWnd, &rc);
+            FillRect(reinterpret_cast<HDC>(wParam), &rc, _DmBgBrush());
+            return 1;
+        }
+        return FALSE;
+
+    // ------------------------------------------------------------------
     // Make all child static controls transparent (no colored background box)
     case WM_CTLCOLORSTATIC:
+        if (_IsDarkMode())
+        {
+            SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
+            SetTextColor(reinterpret_cast<HDC>(wParam), CLR_DM_TEXT);
+            return reinterpret_cast<LRESULT>(_DmBgBrush());
+        }
         SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
         SetTextColor(reinterpret_cast<HDC>(wParam), GetSysColor(COLOR_WINDOWTEXT));
         return reinterpret_cast<LRESULT>(s_hbrDialog ? s_hbrDialog
