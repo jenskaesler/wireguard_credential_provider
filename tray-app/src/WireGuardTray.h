@@ -89,6 +89,7 @@
 #define IDM_UPDATE_CHECK    407
 #define IDM_CHECK_NOW       408
 #define IDM_EXIT            400
+#define WM_SHOW_UPDATE_POPUP (WM_APP + 1)  // lParam unused; strings stored in app members
 
 #define WGCP_TRAY_CLASS     L"WireGuardCPTrayClass"
 #define WGCP_TRAY_MUTEX     L"WireGuardCPTray_SingleInstance"
@@ -135,8 +136,11 @@ private:
     bool                _bAutoUpdateCheck;          // Update-Prüfung aktiviert (aus Registry)
     bool                _bAutoUpdateCheckVisible;   // Update-Prüfung im UI sichtbar (aus Registry)
     DWORD               _dwUpdateCheckIntervalMin;  // Wartezeit vor erstem Check in Minuten
-    bool                _bUpdateBalloonActive; // Update-Balloon sichtbar → Klick öffnet URL
-    WCHAR               _wszUpdateUrl[256];  // URL der neuesten Release-Seite
+    bool                _bUpdateBalloonActive; // Update-Popup offen → Klick öffnet URL
+    WCHAR               _wszUpdateUrl[256];    // URL der neuesten Release-Seite
+    WCHAR               _wszUpdateTitle[128];  // Popup-Titel (z.B. "Update verfügbar")
+    WCHAR               _wszUpdateMsg[256];    // Popup-Text
+    HWND                _hUpdatePopup;         // Handle des Update-Popup-Fensters (NULL = kein Popup)
 
     static LRESULT CALLBACK _WndProc(HWND, UINT, WPARAM, LPARAM);
     static INT_PTR CALLBACK _PinDlgProc(HWND, UINT, WPARAM, LPARAM);
@@ -166,6 +170,8 @@ private:
     WCHAR _wszYkMgrPath[MAX_PATH];  // path found during menu build
     void _OpenConfigDir();
     void _ShowAboutDialog();
+    void _ShowUpdatePopup();
+    static LRESULT CALLBACK _UpdatePopupWndProc(HWND, UINT, WPARAM, LPARAM);
     void _StartUpdateCheckThread(bool bImmediate = false);
     void _StopUpdateCheckThread();
     static DWORD WINAPI _UpdateCheckThread(LPVOID lpParam);

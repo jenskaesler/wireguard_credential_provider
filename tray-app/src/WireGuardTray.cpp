@@ -69,8 +69,11 @@ WireGuardTrayApp::WireGuardTrayApp()
     _bAutoUpdateCheck           = false;
     _bAutoUpdateCheckVisible    = true;
     _dwUpdateCheckIntervalMin   = 5;
-    _bUpdateBalloonActive    = false;
-    ZeroMemory(_wszUpdateUrl, sizeof(_wszUpdateUrl));
+    _bUpdateBalloonActive       = false;
+    ZeroMemory(_wszUpdateUrl,   sizeof(_wszUpdateUrl));
+    ZeroMemory(_wszUpdateTitle, sizeof(_wszUpdateTitle));
+    ZeroMemory(_wszUpdateMsg,   sizeof(_wszUpdateMsg));
+    _hUpdatePopup               = nullptr;
     _hUpdateThread = nullptr;
     _hUpdateStop   = nullptr;
     _hUpdateNow    = nullptr;
@@ -128,6 +131,15 @@ bool WireGuardTrayApp::Init(HINSTANCE hInst)
         MessageBoxW(nullptr, e, L"WireGuard CP Tray", MB_ICONERROR | MB_OK);
         return false;
     }
+
+    // Register update-notification popup class
+    WNDCLASSEXW wcp = {};
+    wcp.cbSize        = sizeof(wcp);
+    wcp.lpfnWndProc   = _UpdatePopupWndProc;
+    wcp.hInstance     = hInst;
+    wcp.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wcp.lpszClassName = L"WGCPUpdatePopup";
+    RegisterClassExW(&wcp); // may fail on re-launch – that's fine
 
     _hWnd = CreateWindowExW(0, WGCP_TRAY_CLASS, L"WireGuard CP Tray",
                              0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, hInst, nullptr);
@@ -1425,13 +1437,6 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
             _ShowContextMenu();
             break;
 
-        case NIN_BALLOONUSERCLICK:
-            if (_bUpdateBalloonActive && _wszUpdateUrl[0])
-            {
-                ShellExecuteW(nullptr, L"open", _wszUpdateUrl, nullptr, nullptr, SW_SHOWNORMAL);
-                _bUpdateBalloonActive = false;
-            }
-            break;
 
         case WM_LBUTTONDBLCLK:
             // Doppelklick: Verbinden / Trennen (Toggle)
@@ -1596,7 +1601,13 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
         }
         return 0;
 
+    case WM_SHOW_UPDATE_POPUP:
+        _bUpdateBalloonActive = true;
+        _ShowUpdatePopup();
+        return 0;
+
     case WM_DESTROY:
+        if (_hUpdatePopup) { DestroyWindow(_hUpdatePopup); _hUpdatePopup = nullptr; }
         KillTimer(hWnd, TIMER_REFRESH_ID);
         KillTimer(hWnd, 2);  // Single-click delayed action timer
         _RemoveTrayIcon();
@@ -4029,9 +4040,97 @@ DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
           L"Version %hs is available. Click here to download."),
         pszDisplay);
 
-    pApp->_bUpdateBalloonActive = true;
-    pApp->_ShowBalloon(wszTitle, wszMsg, NIIF_INFO, 15000);
+    StringCchCopyW(pApp->_wszUpdateTitle, ARRAYSIZE(pApp->_wszUpdateTitle), wszTitle);
+    StringCchCopyW(pApp->_wszUpdateMsg,   ARRAYSIZE(pApp->_wszUpdateMsg),   wszMsg);
+    PostMessageW(pApp->_hWnd, WM_SHOW_UPDATE_POPUP, 0, 0);
 
-    LOG_DEBUG(L"UpdateCheck: balloon shown");
+    LOG_DEBUG(L"UpdateCheck: popup requested");
     return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Update-notification popup (persistent: stays until clicked or X pressed)
+// ---------------------------------------------------------------------------
+
+void WireGuardTrayApp::_ShowUpdatePopup()
+{
+    if (_hUpdatePopup) { DestroyWindow(_hUpdatePopup); _hUpdatePopup = nullptr; }
+
+    // Position bottom-right of work area
+    RECT rcWork = {};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);
+    const int W = 360, H = 90;
+    int x = rcWork.right  - W - 12;
+    int y = rcWork.bottom - H - 12;
+
+    _hUpdatePopup = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        L"WGCPUpdatePopup",
+        _wszUpdateTitle,
+        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        x, y, W, H,
+        _hWnd, nullptr, _hInst, this);
+    if (_hUpdatePopup)
+        ShowWindow(_hUpdatePopup, SW_SHOWNOACTIVATE);
+}
+
+LRESULT CALLBACK WireGuardTrayApp::_UpdatePopupWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    WireGuardTrayApp* pApp = reinterpret_cast<WireGuardTrayApp*>(
+        GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+
+    switch (msg)
+    {
+    case WM_CREATE:
+        SetWindowLongPtrW(hWnd, GWLP_USERDATA,
+            reinterpret_cast<LONG_PTR>(
+                reinterpret_cast<CREATESTRUCTW*>(lParam)->lpCreateParams));
+        return 0;
+
+    case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
+            HDC hDC = BeginPaint(hWnd, &ps);
+            if (pApp && pApp->_wszUpdateMsg[0])
+            {
+                RECT rc; GetClientRect(hWnd, &rc);
+                InflateRect(&rc, -10, -8);
+                HFONT hF = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+                HFONT hOld = reinterpret_cast<HFONT>(SelectObject(hDC, hF));
+                SetBkMode(hDC, TRANSPARENT);
+                DrawTextW(hDC, pApp->_wszUpdateMsg, -1, &rc, DT_WORDBREAK | DT_LEFT);
+                SelectObject(hDC, hOld);
+            }
+            EndPaint(hWnd, &ps);
+        }
+        return 0;
+
+    case WM_SETCURSOR:
+        if (LOWORD(lParam) == HTCLIENT)
+        {
+            SetCursor(LoadCursorW(nullptr, IDC_HAND));
+            return TRUE;
+        }
+        break;
+
+    case WM_LBUTTONUP:
+        // Click anywhere in client area → open releases URL
+        if (pApp && pApp->_wszUpdateUrl[0])
+            ShellExecuteW(nullptr, L"open", pApp->_wszUpdateUrl,
+                          nullptr, nullptr, SW_SHOWNORMAL);
+        if (pApp) pApp->_bUpdateBalloonActive = false;
+        DestroyWindow(hWnd);
+        return 0;
+
+    case WM_CLOSE:
+        // X button → dismiss without opening URL
+        if (pApp) pApp->_bUpdateBalloonActive = false;
+        DestroyWindow(hWnd);
+        return 0;
+
+    case WM_DESTROY:
+        if (pApp) pApp->_hUpdatePopup = nullptr;
+        return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
