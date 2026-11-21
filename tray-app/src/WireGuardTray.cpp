@@ -137,7 +137,7 @@ bool WireGuardTrayApp::Init(HINSTANCE hInst)
     wcp.cbSize        = sizeof(wcp);
     wcp.lpfnWndProc   = _UpdatePopupWndProc;
     wcp.hInstance     = hInst;
-    wcp.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wcp.hbrBackground = nullptr;  // handled in WM_ERASEBKGND for dark/light mode
     wcp.lpszClassName = L"WGCPUpdatePopup";
     RegisterClassExW(&wcp); // may fail on re-launch – that's fine
 
@@ -4085,7 +4085,24 @@ LRESULT CALLBACK WireGuardTrayApp::_UpdatePopupWndProc(HWND hWnd, UINT msg, WPAR
         SetWindowLongPtrW(hWnd, GWLP_USERDATA,
             reinterpret_cast<LONG_PTR>(
                 reinterpret_cast<CREATESTRUCTW*>(lParam)->lpCreateParams));
+        _DmApplyToWindow(hWnd);
         return 0;
+
+    case WM_SETTINGCHANGE:
+        // Re-apply dark mode when theme changes
+        _DmApplyToWindow(hWnd);
+        InvalidateRect(hWnd, nullptr, TRUE);
+        return 0;
+
+    case WM_ERASEBKGND:
+        {
+            RECT rc; GetClientRect(hWnd, &rc);
+            HBRUSH hBr = _IsDarkMode()
+                ? _DmBgBrush()
+                : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+            FillRect(reinterpret_cast<HDC>(wParam), &rc, hBr);
+            return 1;
+        }
 
     case WM_PAINT:
         {
@@ -4095,9 +4112,9 @@ LRESULT CALLBACK WireGuardTrayApp::_UpdatePopupWndProc(HWND hWnd, UINT msg, WPAR
             {
                 RECT rc; GetClientRect(hWnd, &rc);
                 InflateRect(&rc, -10, -8);
-                HFONT hF = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-                HFONT hOld = reinterpret_cast<HFONT>(SelectObject(hDC, hF));
+                HFONT hOld = reinterpret_cast<HFONT>(SelectObject(hDC, _UiFont()));
                 SetBkMode(hDC, TRANSPARENT);
+                SetTextColor(hDC, _IsDarkMode() ? CLR_DM_TEXT : GetSysColor(COLOR_WINDOWTEXT));
                 DrawTextW(hDC, pApp->_wszUpdateMsg, -1, &rc, DT_WORDBREAK | DT_LEFT);
                 SelectObject(hDC, hOld);
             }
