@@ -27,7 +27,8 @@ Release/
 installer/Setup_*.exe
 installer/content/*.exe
 installer/content/*.dll
+installer/content/docs/
+installer/checksums.txt
 
 # Logs
 *.log
-docs/

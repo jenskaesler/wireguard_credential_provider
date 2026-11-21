@@ -30,6 +30,8 @@ set OUT_FILE=%INSTALLER_DIR%Setup_WireGuardCredentialProvider_x64.exe
 set DLL_SRC=%ROOT%\x64\Release\WireGuardCredentialProvider.dll
 set SVC_SRC=%ROOT%\x64\Release\WireGuardShutdownService.exe
 set TRAY_SRC=%ROOT%\tray-app\x64\Release\WireGuardCPTray.exe
+set LICENSE_SRC=%ROOT%\LICENSE
+set CHECKSUMS_FILE=%INSTALLER_DIR%checksums.txt
 :: ---- NSIS suchen ----
 set MAKENSIS=
 where makensis.exe >nul 2>&1
@@ -85,7 +87,7 @@ echo [OK] Tray-App gefunden: %TRAY_SRC%
 
 :: ---- Content vorbereiten ----
 echo.
-echo [1/3] Kopiere Build-Ausgaben nach installer\content\ ...
+echo [1/4] Kopiere Build-Ausgaben und Lizenz nach installer\content\ ...
 if not exist "%CONTENT_DIR%" mkdir "%CONTENT_DIR%"
 copy /Y "%DLL_SRC%" "%CONTENT_DIR%\WireGuardCredentialProvider.dll" >nul
 if errorlevel 1 ( echo [FEHLER] Kopieren der DLL fehlgeschlagen. & goto :error )
@@ -100,10 +102,15 @@ echo [OK] WireGuardCredentialProvider.dll
 echo [OK] WireGuardShutdownService.exe
 echo [OK] WireGuardCPTray.exe
 
+:: Lizenz direkt aus dem Repo-Root ziehen (wird nicht mehr als Datei eingecheckt)
+if not exist "%CONTENT_DIR%\docs" mkdir "%CONTENT_DIR%\docs"
+copy /Y "%LICENSE_SRC%" "%CONTENT_DIR%\docs\LICENSE.txt" >nul
+if errorlevel 1 ( echo [FEHLER] Kopieren der Lizenz fehlgeschlagen. & goto :error )
+echo [OK] LICENSE.txt (aus Repo-Root)
 
 :: ---- NSIS kompilieren ----
 echo.
-echo [2/3] Kompiliere NSIS-Skript ...
+echo [2/4] Kompiliere NSIS-Skript ...
 "!MAKENSIS!" /V2 "%NSI_FILE%"
 if errorlevel 1 (
     echo.
@@ -116,7 +123,7 @@ if errorlevel 1 (
 
 :: ---- Ergebnis ----
 echo.
-echo [3/3] Pruefe Ausgabedatei ...
+echo [3/4] Pruefe Ausgabedatei ...
 if not exist "%OUT_FILE%" (
     echo [FEHLER] Installer-EXE wurde nicht erstellt.
     goto :error
@@ -127,12 +134,26 @@ for %%A in ("%OUT_FILE%") do (
     set NAME=%%~nxA
 )
 
+:: ---- Checksummen generieren (GitHub-kompatibles Format: sha256sum) ----
+echo.
+echo [4/4] Generiere checksums.txt ...
+powershell -NoProfile -Command ^
+  "$hash = (Get-FileHash '%OUT_FILE%' -Algorithm SHA256).Hash.ToLower(); ^
+   $line = $hash + '  !NAME!'; ^
+   Set-Content -Path '%CHECKSUMS_FILE%' -Value $line -Encoding UTF8NoBOM" >nul 2>&1
+if errorlevel 1 (
+    echo [WARNUNG] checksums.txt konnte nicht erstellt werden.
+) else (
+    echo [OK] checksums.txt
+)
+
 echo.
 echo ============================================================
 echo  Installer erfolgreich erstellt:
 echo  !NAME!
 echo  Groesse: !SIZE! Bytes
 echo  Pfad:    %OUT_FILE%
+echo  Checksums: %CHECKSUMS_FILE%
 echo.
 echo  HINWEIS: Der Installer muss als Administrator ausgefuehrt
 echo  werden (UAC-Abfrage erscheint automatisch beim Start).

@@ -110,7 +110,7 @@ Unicode true
 ; Seiten - Installer
 ; ============================================================
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE   "content\docs\LICENSE.rtf"
+!insertmacro MUI_PAGE_LICENSE   "content\docs\LICENSE.txt"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES

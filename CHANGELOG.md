@@ -7,6 +7,52 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.11.1] - 2026-11-21
+
+### Added
+
+- **📄 `docs/SECURITY.md`** — Security policy with vulnerability reporting channels
+  (GitHub Private Vulnerability Reporting, e-mail), response timeline, in-scope / out-of-scope
+  components, and a note on the named-pipe security boundary.
+
+- **🔒 `docs/PRIVACY.md`** — Privacy statement. Documents the only outbound network
+  request (optional GitHub update check: IP address + User-Agent sent to `api.github.com`).
+  Covers log files (local only), YubiKey serial number (in-memory cache, never written to
+  disk or transmitted), and VPN traffic (not inspected by this application).
+
+- **📋 `docs/THIRD-PARTY-NOTICES.md`** — License notices for third-party components
+  installed by the NSIS installer: WireGuard for Windows (MIT, WireGuard LLC) and
+  YubiKey Manager CLI (Apache 2.0, Yubico AB).
+
+- **`installer/build.bat`: LICENSE pulled from repo root** — The script now copies
+  `LICENSE` from the repository root to `installer/content/docs/LICENSE.txt` before
+  compiling the NSIS installer. The file is generated at build time and no longer checked
+  into version control.
+
+- **`installer/build.bat`: SHA-256 checksum file** — After a successful build, the script
+  generates `installer/checksums.txt` in the standard `sha256sum` format
+  (`<hash>  <filename>`) using PowerShell's `Get-FileHash`. The file is ready to upload
+  alongside the installer on GitHub Releases.
+
+### Changed
+
+- **`installer/WireGuardCredentialProvider.nsi`**: NSIS license page updated from
+  `content\docs\LICENSE.rtf` to `content\docs\LICENSE.txt` (the RTF file was equivalent
+  plain text; NSIS renders both identically).
+
+- **`installer/content/docs/`** removed from version control. The folder is now generated
+  by `build.bat` from the root `LICENSE` and is listed in `.gitignore`.
+
+- **`README.md`**: License badge corrected from "MIT" to "Non-Commercial Copyleft" to
+  accurately reflect the license in `LICENSE`. Added a **Security & Privacy** section
+  linking to the three new documentation files.
+
+- **`.gitignore`**: Replaced global `docs/` ignore (which would have hidden the new
+  `docs/` directory) with a scoped `installer/content/docs/` ignore. Added
+  `installer/checksums.txt`.
+
+---
+
 ## [2026.9.9] - 2026-09-10
 
 ### Added

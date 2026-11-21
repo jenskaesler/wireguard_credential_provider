@@ -4,7 +4,7 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
 [![Language](https://img.shields.io/badge/Language-C%2B%2B17-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/License-Non--Commercial%20Copyleft-orange)](LICENSE)
 [![Version](https://img.shields.io/badge/Version-2026.9.9-blue)](CHANGELOG.md)
 [![WireGuard](https://img.shields.io/badge/WireGuard-Windows-88171A?logo=wireguard&logoColor=white)](https://www.wireguard.com/install/)
 
@@ -133,6 +133,11 @@ WireGuardCredentialProvider/
 │   ├── Setup-YubiKey.ps1               – YubiKey PIV setup and registration tool
 │   ├── build.bat
 │   └── content/
+│
+├── docs/
+│   ├── SECURITY.md                     – Vulnerability reporting policy
+│   ├── PRIVACY.md                      – Data collection and privacy statement
+│   └── THIRD-PARTY-NOTICES.md          – Third-party component licenses
 │
 ├── WireGuardCredentialProvider.sln
 ├── CHANGELOG.md
@@ -274,4 +279,12 @@ with an active poll loop until the process is gone before copying new binaries.
 
 ## 📜 License
 
-[MIT](LICENSE)
+[Non-Commercial-Distribution Copyleft License v1.0](LICENSE) — free for internal use
+(including commercial/revenue-generating operations); redistribution and commercial
+distribution require permission. See [LICENSE](LICENSE) for full terms.
+
+## 🔒 Security & Privacy
+
+- [Security Policy](docs/SECURITY.md) — how to report vulnerabilities
+- [Privacy Statement](docs/PRIVACY.md) — data collection (tl;dr: none, except an optional update check to GitHub)
+- [Third-Party Notices](docs/THIRD-PARTY-NOTICES.md) — licenses for WireGuard and YubiKey Manager CLI
