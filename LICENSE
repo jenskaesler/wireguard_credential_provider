@@ -1,21 +1,149 @@
-MIT License
+WireGuard Credential Provider Non-Commercial-Distribution Copyleft License
 
-Copyright (c) 2026 Jens Kaesler
+Version 1.0, November 2026
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Copyright (c) 2026 Jens Kaesler <mail@jens-kaesler.de>
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+TERMS AND CONDITIONS
+
+1. DEFINITIONS
+
+"Software" means the WireGuard Credential Provider source code, compiled
+binaries (including but not limited to the Credential Provider DLL),
+installer packages, documentation, and all associated files in this
+repository.
+
+"Modified version" means any work based on or derived from the Software,
+including translations, adaptations, ports to other platforms, and any
+software that incorporates the Software or any part of its source code,
+in whole or in part, whether in source or compiled form.
+
+"Commercial Distribution" means offering, selling, licensing, sublicensing,
+or otherwise making the Software or a Modified version available to third
+parties in exchange for a fee, including as a hosted or managed service
+(e.g. Software-as-a-Service), or incorporating the Software, a Modified
+version, or any part of its source code into any other product or service
+that is itself sold, licensed, or offered for a fee, regardless of whether
+that product or service is marketed under a different name or whether the
+incorporated code constitutes only a small part of it.
+
+Commercial Distribution does NOT include using the Software or a Modified
+version for your own internal purposes or activities, even where those
+activities themselves generate revenue, income, membership fees, or other
+monetary compensation (for example, a company deploying the Software for
+its own employees' authentication). Such use is explicitly permitted under
+Section 2 without restriction and without any requirement to contact or
+seek permission from the copyright holder.
+
+2. GRANT OF RIGHTS
+
+Subject to the terms of this License, you are granted a perpetual,
+worldwide, royalty-free, non-exclusive license to:
+
+a. Use the Software for any purpose, including commercial and
+   revenue-generating internal activities, without restriction and
+   without prior notice to or permission from the copyright holder.
+
+b. Copy, modify, and create Modified versions of the Software.
+
+c. Distribute the Software and Modified versions, subject strictly to
+   the conditions in Section 3.
+
+This License and the rights granted herein are irrevocable for the
+Software as published, except as provided in Section 5.
+
+3. CONDITIONS
+
+a. NO COMMERCIAL DISTRIBUTION WITHOUT PERMISSION
+
+   You may not engage in Commercial Distribution, as defined in Section 1,
+   of the Software, any Modified version, or any part of its source code,
+   without prior written permission from the copyright holder.
+
+b. MANDATORY COPYLEFT (SHARE-ALIKE)
+
+   If you distribute, publish, deploy, or otherwise make available to any
+   third party a Modified version of the Software, in whole or in part,
+   and regardless of whether this constitutes Commercial Distribution,
+   you MUST:
+
+   i.   License the entire Modified version under this exact License,
+        with no additional restrictions, no additional terms, and no
+        further conditions of any kind beyond what this License states.
+
+   ii.  Make the complete corresponding source code of the Modified
+        version publicly and freely available, at no charge, on GitHub
+        or an equivalent publicly accessible version control platform,
+        no later than the time of distribution.
+
+   iii. Clearly and prominently state that changes were made to the
+        original Software, identify the nature of those changes, and
+        state the date on which they were made.
+
+   iv.  Preserve this entire License text, unmodified, and all copyright
+        and attribution notices in the Modified version.
+
+   This obligation is permanent and applies to every subsequent
+   redistribution and to every further Modified version derived from it,
+   without exception and without time limit. It may not be waived,
+   narrowed, or overridden by any other agreement you enter into with a
+   third party.
+
+c. ATTRIBUTION
+
+   You must retain all copyright notices and this License text,
+   unmodified and in full, in all copies of the Software and any
+   Modified versions.
+
+d. NO ADDITIONAL RESTRICTIONS
+
+   You may not impose any additional license terms, restrictions, patent
+   claims, or technical measures (e.g. DRM) on the Software or a Modified
+   version that would restrict the rights granted to downstream
+   recipients under this License.
+
+4. NO WARRANTY
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
+THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
+OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+5. TERMINATION AND ENFORCEMENT
+
+Your rights under this License terminate automatically and immediately
+upon any violation of Section 3. Termination is retroactive to the moment
+of violation and does not require notice from the copyright holder to
+take effect.
+
+Upon termination, you must immediately cease all use, copying, and
+distribution of the Software and any Modified version, and destroy or
+remove all copies in your possession or control.
+
+A violation of Section 3, in particular Commercial Distribution without
+permission or failure to release a Modified version under this License
+and its full source code, constitutes copyright infringement. The
+copyright holder reserves the right to pursue any and all legal remedies
+available under applicable copyright law against any party who violates
+this License, including but not limited to injunctive relief and claims
+for damages.
+
+Rights for any party who has at no point violated this License are not
+affected by the termination of another party's rights.
+
+6. NO IMPLIED LICENSE
+
+Nothing in this License shall be construed as granting any rights under
+patent, trademark, or any other intellectual property right of the
+copyright holder, except as expressly stated above. "WireGuard" is a
+registered trademark of Jason A. Donenfeld. This License does not grant
+any rights to that trademark, and this project is not affiliated with or
+endorsed by its owner.
+
+7. CONTACT
+
+For Commercial Distribution licensing inquiries or permissions beyond
+the scope of this License, contact: mail@jens-kaesler.de
