@@ -140,6 +140,7 @@ WireGuardCredentialProvider/
 │   └── THIRD-PARTY-NOTICES.md          – Third-party component licenses
 │
 ├── WireGuardCredentialProvider.sln
+├── bump-version.ps1                    – Interactive version bump (YYYY.MM.N)
 ├── CHANGELOG.md
 ├── LICENSE
 └── README.md

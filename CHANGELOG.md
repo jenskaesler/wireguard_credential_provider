@@ -7,7 +7,7 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
-## [2026.11.1] - 2026-11-21
+## [2026.11.0] - 2026-11-21
 
 ### Added
 
@@ -23,6 +23,12 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 - **📋 `docs/THIRD-PARTY-NOTICES.md`** — License notices for third-party components
   installed by the NSIS installer: WireGuard for Windows (MIT, WireGuard LLC) and
   YubiKey Manager CLI (Apache 2.0, Yubico AB).
+
+- **`bump-version.ps1`** — Interactive version-bump script (format `YYYY.MM.N`). Updates
+  `FILEVERSION` / `ProductVersion` in both `.rc` resource files and the README version
+  badge. Modes: interactive menu, or non-interactive with `-Patch` / `-Month` / `-Version`.
+  Integrated into `build.bat` as step 0; exits with code 10 on a bump to remind the user
+  to rebuild the solution in Visual Studio before continuing.
 
 - **`installer/build.bat`: LICENSE pulled from repo root** — The script now copies
   `LICENSE` from the repository root to `installer/content/docs/LICENSE.txt` before
@@ -50,6 +56,8 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 - **`.gitignore`**: Replaced global `docs/` ignore (which would have hidden the new
   `docs/` directory) with a scoped `installer/content/docs/` ignore. Added
   `installer/checksums.txt`.
+
+- **`installer/README.md`** and **`installer/build.bat`** translated to English.
 
 ---
 
