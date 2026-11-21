@@ -3504,7 +3504,8 @@ static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
 enum { IDC_ABT_ICON=10, IDC_ABT_VER, IDC_ABT_CPY, IDC_ABT_DESC, IDC_ABT_LINK, IDC_ABT_SEP,
        IDC_ABT_LINK_CL, IDC_ABT_LINK_REL, IDC_ABT_CHECKUPDATE };
 
-struct AboutDlgData { PCWSTR ver; PCWSTR url; HWND hParent; HINSTANCE hInst; bool bUpdateVisible; };
+struct AboutDlgData { PCWSTR ver; PCWSTR url; HWND hParent; HINSTANCE hInst; bool bUpdateVisible;
+                      WireGuardTrayApp* pApp; };
 
 // Schriftarten – einmal beim WM_CREATE erstellt, bei WM_DESTROY freigegeben
 struct AboutFonts { HFONT hBold; HFONT hNormal; };
@@ -3599,7 +3600,7 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
         StringCchPrintfW(wszChLog, ARRAYSIZE(wszChLog),
             L"<a href=\"%s\">%s</a>",
             WGCP_CHANGELOG_URL,
-            T(L"📋 Änderungsprotokoll", L"📋 Changelog"));
+            T(L"Änderungsprotokoll", L"Changelog"));
         HWND hLinkCL = CreateWindowExW(0, WC_LINK, wszChLog,
             WS_CHILD|WS_VISIBLE|WS_TABSTOP,
             X0, 204, W_CT, 20, hWnd,
@@ -3612,7 +3613,7 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
         StringCchPrintfW(wszRel, ARRAYSIZE(wszRel),
             L"<a href=\"%s\">%s</a>",
             WGCP_RELEASES_URL,
-            T(L"🚀 Releases", L"🚀 Releases"));
+            T(L"Releases", L"Releases"));
         HWND hLinkRel = CreateWindowExW(0, WC_LINK, wszRel,
             WS_CHILD|WS_VISIBLE|WS_TABSTOP,
             X0, 228, W_CT, 20, hWnd,
@@ -3751,9 +3752,9 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
             if (s_pd) EnableWindow(s_pd->hParent, TRUE);
             DestroyWindow(hWnd);
         }
-        if (LOWORD(wParam) == IDC_ABT_CHECKUPDATE && s_pd)
+        if (LOWORD(wParam) == IDC_ABT_CHECKUPDATE && s_pd && s_pd->pApp)
         {
-            PostMessageW(s_pd->hParent, WM_COMMAND, MAKEWPARAM(IDM_CHECK_NOW, 0), 0);
+            s_pd->pApp->_StartUpdateCheckThread(true);
             EnableWindow(GetDlgItem(hWnd, IDC_ABT_CHECKUPDATE), FALSE);
             SetWindowTextW(GetDlgItem(hWnd, IDC_ABT_CHECKUPDATE),
                 T(L"Prüfung läuft...", L"Checking..."));
@@ -3792,7 +3793,7 @@ void WireGuardTrayApp::_ShowAboutDialog()
     int scW = GetSystemMetrics(SM_CXSCREEN);
     int scH = GetSystemMetrics(SM_CYSCREEN);
 
-    AboutDlgData dlgData = { wszVersion, WGCP_GITHUB_URL, _hWnd, _hInst, _bAutoUpdateCheckVisible };
+    AboutDlgData dlgData = { wszVersion, WGCP_GITHUB_URL, _hWnd, _hInst, _bAutoUpdateCheckVisible, this };
 
     EnableWindow(_hWnd, FALSE);
     HWND hAbout = CreateWindowExW(
