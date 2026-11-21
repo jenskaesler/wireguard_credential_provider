@@ -132,7 +132,8 @@ private:
     WCHAR               _wszPin[64];
     WCHAR               _wszScStatusMsg[MAX_LABEL_WGCP];
     WCHAR               _wszYkSerial[32];    // Gecachte YubiKey-Seriennummer (async befüllt)
-    bool                _bAutoUpdateCheck;   // Update-Prüfung aktiviert (aus Registry)
+    bool                _bAutoUpdateCheck;        // Update-Prüfung aktiviert (aus Registry)
+    bool                _bAutoUpdateCheckVisible; // Update-Prüfung im UI sichtbar (aus Registry)
     bool                _bUpdateBalloonActive; // Update-Balloon sichtbar → Klick öffnet URL
     WCHAR               _wszUpdateUrl[256];  // URL der neuesten Release-Seite
 

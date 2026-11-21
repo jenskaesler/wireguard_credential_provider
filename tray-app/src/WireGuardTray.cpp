@@ -66,11 +66,13 @@ WireGuardTrayApp::WireGuardTrayApp()
     ZeroMemory(_wszPin,            sizeof(_wszPin));
     ZeroMemory(_wszScStatusMsg,    sizeof(_wszScStatusMsg));
     ZeroMemory(_wszYkSerial,       sizeof(_wszYkSerial));
-    _bAutoUpdateCheck     = false;
-    _bUpdateBalloonActive = false;
+    _bAutoUpdateCheck        = false;
+    _bAutoUpdateCheckVisible = true;
+    _bUpdateBalloonActive    = false;
     ZeroMemory(_wszUpdateUrl, sizeof(_wszUpdateUrl));
-    _hUpdateThread        = nullptr;
-    _hUpdateStop          = nullptr;
+    _hUpdateThread = nullptr;
+    _hUpdateStop   = nullptr;
+    _hUpdateNow    = nullptr;
 }
 
 WireGuardTrayApp::~WireGuardTrayApp()
@@ -193,7 +195,8 @@ void WireGuardTrayApp::_LoadConfig()
         ReadRegString(hKey, WGCP_REG_EXEPATH,   _wszExePath,   MAX_PATH_WGCP, WGCP_DEFAULT_EXEPATH);
         ReadRegString(hKey, WGCP_REG_WGEXEPATH, _wszWgExePath, MAX_PATH_WGCP, WGCP_DEFAULT_WGEXEPATH);
         _dwHandshakeTimeoutSec = ReadRegDword(hKey, WGCP_REG_HANDSHAKE_TIMEOUT_SEC, 0);
-        _bAutoUpdateCheck = (ReadRegDword(hKey, L"AutoUpdateCheck", 1) != 0); // default: an
+        _bAutoUpdateCheck        = (ReadRegDword(hKey, L"AutoUpdateCheck",        1) != 0);
+        _bAutoUpdateCheckVisible = (ReadRegDword(hKey, L"AutoUpdateCheckVisible", 1) != 0);
         RegCloseKey(hKey);
         LOG_DEBUG(L"Tray: Config loaded from registry");
     }
@@ -757,9 +760,10 @@ void WireGuardTrayApp::_ShowContextMenu()
     _MAI(hMenu, MFS_ENABLED, IDM_OPEN_CONFIG_DIR,
          T(L"Konfigurationsordner öffnen...", L"Open config folder..."),
          MI::ConfigFolder);
-    _MA(hMenu, (_bAutoUpdateCheck ? MFS_CHECKED : 0u) | MFS_ENABLED,
-        IDM_UPDATE_CHECK,
-        T(L"Auf Updates prüfen", L"Check for updates"));
+    if (_bAutoUpdateCheckVisible)
+        _MA(hMenu, (_bAutoUpdateCheck ? MFS_CHECKED : 0u) | MFS_ENABLED,
+            IDM_UPDATE_CHECK,
+            T(L"Auf Updates prüfen", L"Check for updates"));
     _MAI(hMenu, MFS_ENABLED, IDM_ABOUT,
          T(L"Informationen...", L"About..."), MI::About);
     _MS(hMenu);
@@ -3487,7 +3491,7 @@ static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
 enum { IDC_ABT_ICON=10, IDC_ABT_VER, IDC_ABT_CPY, IDC_ABT_DESC, IDC_ABT_LINK, IDC_ABT_SEP,
        IDC_ABT_LINK_CL, IDC_ABT_LINK_REL, IDC_ABT_CHECKUPDATE };
 
-struct AboutDlgData { PCWSTR ver; PCWSTR url; HWND hParent; HINSTANCE hInst; };
+struct AboutDlgData { PCWSTR ver; PCWSTR url; HWND hParent; HINSTANCE hInst; bool bUpdateVisible; };
 
 // Schriftarten – einmal beim WM_CREATE erstellt, bei WM_DESTROY freigegeben
 struct AboutFonts { HFONT hBold; HFONT hNormal; };
@@ -3610,20 +3614,24 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
             reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_SEP)),
             s_pd->hInst, nullptr);
 
-        // -- "Check for Updates" button (left, y=266) --
-        HWND hChk = CreateWindowExW(0, L"BUTTON",
-            T(L"Auf Updates prüfen", L"Check for Updates"),
-            WS_CHILD|WS_VISIBLE|WS_TABSTOP,
-            X0, 266, 160, 28, hWnd,
-            reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_CHECKUPDATE)),
-            s_pd->hInst, nullptr);
-        SendMessageW(hChk, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
+        // -- "Check for Updates" button (left, y=266) – only when visible --
+        if (s_pd->bUpdateVisible)
+        {
+            HWND hChk = CreateWindowExW(0, L"BUTTON",
+                T(L"Auf Updates prüfen", L"Check for Updates"),
+                WS_CHILD|WS_VISIBLE|WS_TABSTOP,
+                X0, 266, 160, 28, hWnd,
+                reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_CHECKUPDATE)),
+                s_pd->hInst, nullptr);
+            SendMessageW(hChk, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
+        }
 
-        // -- OK button (right, y=266) --
+        // -- OK button: right when check button visible, centered otherwise --
+        const int okX = s_pd->bUpdateVisible ? 314 : 165;
         HWND hOK = CreateWindowExW(0, L"BUTTON",
             T(L"OK", L"OK"),
             WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,
-            314, 266, 90, 28, hWnd,
+            okX, 266, 90, 28, hWnd,
             reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDOK)),
             s_pd->hInst, nullptr);
         SendMessageW(hOK, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
@@ -3771,7 +3779,7 @@ void WireGuardTrayApp::_ShowAboutDialog()
     int scW = GetSystemMetrics(SM_CXSCREEN);
     int scH = GetSystemMetrics(SM_CYSCREEN);
 
-    AboutDlgData dlgData = { wszVersion, WGCP_GITHUB_URL, _hWnd, _hInst };
+    AboutDlgData dlgData = { wszVersion, WGCP_GITHUB_URL, _hWnd, _hInst, _bAutoUpdateCheckVisible };
 
     EnableWindow(_hWnd, FALSE);
     HWND hAbout = CreateWindowExW(
