@@ -5,11 +5,11 @@
 
 setlocal EnableDelayedExpansion
 
-:: ---- Admin-Check (nur relevant wenn build.bat selbst Installer-Tests ausfuehrt) ----
+:: ---- Admin check ----
 net session >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [FEHLER] Bitte build.bat als Administrator ausfuehren.
-    echo          Rechtsklick auf build.bat -^> "Als Administrator ausfuehren"
+    echo [ERROR] Please run build.bat as Administrator.
+    echo         Right-click build.bat -^> "Run as administrator"
     pause
     exit /b 1
 )
@@ -20,7 +20,7 @@ echo  WireGuard Credential Provider - Installer Build
 echo ============================================================
 echo.
 
-:: ---- Pfade ----
+:: ---- Paths ----
 set ROOT=%~dp0..
 set INSTALLER_DIR=%~dp0
 set CONTENT_DIR=%INSTALLER_DIR%content
@@ -32,7 +32,7 @@ set SVC_SRC=%ROOT%\x64\Release\WireGuardShutdownService.exe
 set TRAY_SRC=%ROOT%\tray-app\x64\Release\WireGuardCPTray.exe
 set LICENSE_SRC=%ROOT%\LICENSE
 set CHECKSUMS_FILE=%INSTALLER_DIR%checksums.txt
-:: ---- NSIS suchen ----
+:: ---- Locate NSIS ----
 set MAKENSIS=
 where makensis.exe >nul 2>&1
 if not errorlevel 1 set MAKENSIS=makensis.exe
@@ -48,84 +48,84 @@ if "!MAKENSIS!"=="" (
     )
 )
 if "!MAKENSIS!"=="" (
-    echo [FEHLER] makensis.exe nicht gefunden.
-    echo         Bitte NSIS installieren: https://nsis.sourceforge.io/
+    echo [ERROR] makensis.exe not found.
+    echo         Please install NSIS: https://nsis.sourceforge.io/
     goto :error
 )
-echo [OK] NSIS gefunden: !MAKENSIS!
+echo [OK] NSIS found: !MAKENSIS!
 
-:: ---- Build-Ausgaben pruefen ----
+:: ---- Verify build outputs ----
 if not exist "%DLL_SRC%" (
-    echo [FEHLER] DLL nicht gefunden:
+    echo [ERROR] DLL not found:
     echo         %DLL_SRC%
     echo.
-    echo         Bitte zuerst in Visual Studio bauen:
-    echo         Konfiguration: Release ^| x64
+    echo         Please build in Visual Studio first:
+    echo         Configuration: Release ^| x64
     goto :error
 )
-echo [OK] DLL gefunden: %DLL_SRC%
+echo [OK] DLL found: %DLL_SRC%
 
 if not exist "%SVC_SRC%" (
-    echo [FEHLER] Shutdown-Service nicht gefunden:
+    echo [ERROR] Shutdown service not found:
     echo         %SVC_SRC%
     echo.
-    echo         Bitte WireGuardShutdownService in Visual Studio bauen:
-    echo         Konfiguration: Release ^| x64
+    echo         Please build WireGuardShutdownService in Visual Studio:
+    echo         Configuration: Release ^| x64
     goto :error
 )
-echo [OK] Service gefunden: %SVC_SRC%
+echo [OK] Service found: %SVC_SRC%
 
 if not exist "%TRAY_SRC%" (
-    echo [FEHLER] Tray-App nicht gefunden:
+    echo [ERROR] Tray app not found:
     echo         %TRAY_SRC%
     echo.
-    echo         Bitte WireGuardTray in Visual Studio bauen:
-    echo         Konfiguration: Release ^| x64
+    echo         Please build WireGuardTray in Visual Studio:
+    echo         Configuration: Release ^| x64
     goto :error
 )
-echo [OK] Tray-App gefunden: %TRAY_SRC%
+echo [OK] Tray app found: %TRAY_SRC%
 
-:: ---- Content vorbereiten ----
+:: ---- Prepare content ----
 echo.
-echo [1/4] Kopiere Build-Ausgaben und Lizenz nach installer\content\ ...
+echo [1/4] Copying build outputs and license to installer\content\ ...
 if not exist "%CONTENT_DIR%" mkdir "%CONTENT_DIR%"
 copy /Y "%DLL_SRC%" "%CONTENT_DIR%\WireGuardCredentialProvider.dll" >nul
-if errorlevel 1 ( echo [FEHLER] Kopieren der DLL fehlgeschlagen. & goto :error )
+if errorlevel 1 ( echo [ERROR] Failed to copy DLL. & goto :error )
 
 copy /Y "%SVC_SRC%" "%CONTENT_DIR%\WireGuardShutdownService.exe" >nul
-if errorlevel 1 ( echo [FEHLER] Kopieren des Services fehlgeschlagen. & goto :error )
+if errorlevel 1 ( echo [ERROR] Failed to copy service. & goto :error )
 
 copy /Y "%TRAY_SRC%" "%CONTENT_DIR%\WireGuardCPTray.exe" >nul
-if errorlevel 1 ( echo [FEHLER] Kopieren der Tray-App fehlgeschlagen. & goto :error )
+if errorlevel 1 ( echo [ERROR] Failed to copy tray app. & goto :error )
 
 echo [OK] WireGuardCredentialProvider.dll
 echo [OK] WireGuardShutdownService.exe
 echo [OK] WireGuardCPTray.exe
 
-:: Lizenz direkt aus dem Repo-Root ziehen (wird nicht mehr als Datei eingecheckt)
+:: Pull LICENSE from repo root (not checked in as a file)
 if not exist "%CONTENT_DIR%\docs" mkdir "%CONTENT_DIR%\docs"
 copy /Y "%LICENSE_SRC%" "%CONTENT_DIR%\docs\LICENSE.txt" >nul
-if errorlevel 1 ( echo [FEHLER] Kopieren der Lizenz fehlgeschlagen. & goto :error )
-echo [OK] LICENSE.txt (aus Repo-Root)
+if errorlevel 1 ( echo [ERROR] Failed to copy license. & goto :error )
+echo [OK] LICENSE.txt (from repo root)
 
-:: ---- NSIS kompilieren ----
+:: ---- Compile NSIS script ----
 echo.
-echo [2/4] Kompiliere NSIS-Skript ...
+echo [2/4] Compiling NSIS script ...
 "!MAKENSIS!" /V2 "%NSI_FILE%"
 if errorlevel 1 (
     echo.
-    echo [FEHLER] NSIS-Kompilierung fehlgeschlagen.
-    echo         Pruefe ob alle Plugins installiert sind:
+    echo [ERROR] NSIS compilation failed.
+    echo         Check that all plugins are installed:
     echo           - nsProcess:  https://nsis.sourceforge.io/NsProcess_plugin
     echo           - SimpleSC:   https://nsis.sourceforge.io/NSIS_Simple_Service_Plugin
     goto :error
 )
 
-:: ---- Ergebnis ----
+:: ---- Verify output ----
 echo.
-echo [3/4] Pruefe Ausgabedatei ...
+echo [3/4] Verifying output file ...
 if not exist "%OUT_FILE%" (
-    echo [FEHLER] Installer-EXE wurde nicht erstellt.
+    echo [ERROR] Installer EXE was not created.
     goto :error
 )
 
@@ -134,29 +134,29 @@ for %%A in ("%OUT_FILE%") do (
     set NAME=%%~nxA
 )
 
-:: ---- Checksummen generieren (GitHub-kompatibles Format: sha256sum) ----
+:: ---- Generate checksums (sha256sum format for GitHub releases) ----
 echo.
-echo [4/4] Generiere checksums.txt ...
+echo [4/4] Generating checksums.txt ...
 powershell -NoProfile -Command ^
   "$hash = (Get-FileHash '%OUT_FILE%' -Algorithm SHA256).Hash.ToLower(); ^
    $line = $hash + '  !NAME!'; ^
    Set-Content -Path '%CHECKSUMS_FILE%' -Value $line -Encoding UTF8NoBOM" >nul 2>&1
 if errorlevel 1 (
-    echo [WARNUNG] checksums.txt konnte nicht erstellt werden.
+    echo [WARNING] Could not create checksums.txt.
 ) else (
     echo [OK] checksums.txt
 )
 
 echo.
 echo ============================================================
-echo  Installer erfolgreich erstellt:
+echo  Installer built successfully:
 echo  !NAME!
-echo  Groesse: !SIZE! Bytes
-echo  Pfad:    %OUT_FILE%
+echo  Size:      !SIZE! bytes
+echo  Path:      %OUT_FILE%
 echo  Checksums: %CHECKSUMS_FILE%
 echo.
-echo  HINWEIS: Der Installer muss als Administrator ausgefuehrt
-echo  werden (UAC-Abfrage erscheint automatisch beim Start).
+echo  NOTE: The installer must be run as Administrator.
+echo  (UAC prompt appears automatically on launch.)
 echo ============================================================
 echo.
 pause
@@ -165,7 +165,7 @@ exit /b 0
 :error
 echo.
 echo ============================================================
-echo  Build FEHLGESCHLAGEN - siehe Fehlermeldung oben.
+echo  Build FAILED - see error message above.
 echo ============================================================
 echo.
 pause
