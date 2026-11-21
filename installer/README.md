@@ -5,10 +5,11 @@
 | Datei | Beschreibung |
 |---|---|
 | `Setup_WireGuardCredentialProvider_x64.exe` | Installer (wird von `build.bat` erzeugt) |
+| `checksums.txt` | SHA-256-Prüfsumme des Installers (wird von `build.bat` erzeugt) |
 | `WireGuardCredentialProvider.nsi` | NSIS-Skript |
 | `Setup-YubiKey.ps1` | YubiKey PIV Einrichtungs- und Registrierungs-Tool |
-| `build.bat` | Kopiert Binaries und kompiliert den Installer |
-| `content/` | Installer-Assets (Icons, Registrierungsdateien) |
+| `build.bat` | Kopiert Binaries, zieht LICENSE aus dem Repo-Root und kompiliert den Installer |
+| `content/` | Installer-Assets (Icons, Registrierungsdateien); `content/docs/` wird von `build.bat` generiert |
 
 ---
 
@@ -51,6 +52,23 @@ Uninstall.exe /S
 | `/UPDATECHECK=n` | REG_DWORD | Update-Prüfung aktivieren/deaktivieren (1/0) | `/UPDATECHECK=0` |
 
 > Parameter werden immer angewendet – auch bei Updates. Nicht angegebene Parameter bleiben unverändert.
+
+---
+
+## Checksummen
+
+Nach jedem Build erzeugt `build.bat` eine `checksums.txt` im `sha256sum`-Format:
+
+```
+<sha256-hash>  Setup_WireGuardCredentialProvider_x64.exe
+```
+
+Die Datei eignet sich direkt zum Upload auf GitHub Releases. Prüfung unter Windows:
+
+```powershell
+(Get-FileHash .\Setup_WireGuardCredentialProvider_x64.exe -Algorithm SHA256).Hash.ToLower()
+# Vergleich mit dem Hash in checksums.txt
+```
 
 ---
 
