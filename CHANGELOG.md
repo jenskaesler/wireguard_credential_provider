@@ -7,6 +7,41 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.11.1] - 2026-11-21
+
+### Added
+
+- **About dialog: Changelog & Releases links** — The *About* dialog now shows two
+  SysLink hyperlinks directly below the GitHub link: 📋 Changelog (opens
+  `CHANGELOG.md` on GitHub) and 🚀 Releases (opens the GitHub Releases page).
+  Both link labels are bilingual (German / English via the existing `T()` macro).
+
+- **About dialog: Check for Updates button** — A *Check for Updates* / *Auf Updates
+  prüfen* button triggers an immediate GitHub release check without waiting for the
+  configurable startup delay. The button disables itself with *Checking…* / *Prüfung
+  läuft…* feedback while the check is in progress.
+
+- **`AutoUpdateCheckVisible` registry key** (REG_DWORD, default `1`) — When set to
+  `0`, hides the update-check toggle from the tray context menu and the *Check for
+  Updates* button from the About dialog. Intended for managed deployments where
+  administrators want to suppress update-check UI entirely. The OK button is centred
+  automatically when the button is hidden.
+
+- **`AutoUpdateCheckInterval` registry key** (REG_DWORD, default `5`) — Configures
+  the startup delay in minutes before the first automatic update check. Replaces the
+  previously hard-coded 10-minute wait. Setting the value to `0` triggers the check
+  immediately at startup.
+
+- **Installer: `/UPDATECHECKVISIBLE=n` silent parameter** — Sets
+  `AutoUpdateCheckVisible` during silent install; default written on first install is
+  `1`.
+
+- **Installer: `/UPDATECHECKINTERVAL=n` silent parameter** — Sets
+  `AutoUpdateCheckInterval` during silent install; default written on first install is
+  `5`.
+
+---
+
 ## [2026.11.0] - 2026-11-21
 
 ### Added

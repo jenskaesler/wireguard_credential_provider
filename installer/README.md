@@ -51,6 +51,8 @@ Uninstall.exe /S
 | `/TILELABEL=text` | REG_SZ | Label for the pre-logon credential tile | `/TILELABEL="Corporate VPN"` |
 | `/CONFIGDIR=path` | REG_SZ | WireGuard configuration directory | `/CONFIGDIR="C:\WG\"` |
 | `/UPDATECHECK=n` | REG_DWORD | Enable/disable update check (1/0) | `/UPDATECHECK=0` |
+| `/UPDATECHECKVISIBLE=n` | REG_DWORD | Show/hide update-check UI in tray menu and About (1/0) | `/UPDATECHECKVISIBLE=0` |
+| `/UPDATECHECKINTERVAL=n` | REG_DWORD | Minutes before first update check after startup | `/UPDATECHECKINTERVAL=10` |
 
 > Parameters are always applied — including during updates. Parameters not specified remain unchanged.
 
