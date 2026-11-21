@@ -1513,6 +1513,12 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
                 _StopUpdateCheckThread();
             return 0;
         }
+        if (uCmd == IDM_CHECK_NOW)
+        {
+            if (_hUpdateNow) SetEvent(_hUpdateNow);
+            else _StartUpdateCheckThread(true);
+            return 0;
+        }
         if (uCmd == IDM_EXIT)
         {
             LOG_DEBUG(L"Tray: Exit");
@@ -3478,7 +3484,8 @@ static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
 // ---------------------------------------------------------------------------
 
 // Control-IDs (lokale Konstanten)
-enum { IDC_ABT_ICON=10, IDC_ABT_VER, IDC_ABT_CPY, IDC_ABT_DESC, IDC_ABT_LINK, IDC_ABT_SEP };
+enum { IDC_ABT_ICON=10, IDC_ABT_VER, IDC_ABT_CPY, IDC_ABT_DESC, IDC_ABT_LINK, IDC_ABT_SEP,
+       IDC_ABT_LINK_CL, IDC_ABT_LINK_REL, IDC_ABT_CHECKUPDATE };
 
 struct AboutDlgData { PCWSTR ver; PCWSTR url; HWND hParent; HINSTANCE hInst; };
 
@@ -3565,23 +3572,58 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
             s_pd->url);
         HWND hLink = CreateWindowExW(0, WC_LINK, wszLink,
             WS_CHILD|WS_VISIBLE|WS_TABSTOP,
-            X0, 180, W_CT, 24, hWnd,
+            X0, 180, W_CT, 20, hWnd,
             reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_LINK)),
             s_pd->hInst, nullptr);
         SendMessageW(hLink, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
 
-        // -- Bottom separator (y=222) --
+        // -- Changelog SysLink (y=204) --
+        WCHAR wszChLog[512] = {};
+        StringCchPrintfW(wszChLog, ARRAYSIZE(wszChLog),
+            L"<a href=\"%s\">%s</a>",
+            WGCP_CHANGELOG_URL,
+            T(L"📋 Änderungsprotokoll", L"📋 Changelog"));
+        HWND hLinkCL = CreateWindowExW(0, WC_LINK, wszChLog,
+            WS_CHILD|WS_VISIBLE|WS_TABSTOP,
+            X0, 204, W_CT, 20, hWnd,
+            reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_LINK_CL)),
+            s_pd->hInst, nullptr);
+        SendMessageW(hLinkCL, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
+
+        // -- Releases SysLink (y=228) --
+        WCHAR wszRel[512] = {};
+        StringCchPrintfW(wszRel, ARRAYSIZE(wszRel),
+            L"<a href=\"%s\">%s</a>",
+            WGCP_RELEASES_URL,
+            T(L"🚀 Releases", L"🚀 Releases"));
+        HWND hLinkRel = CreateWindowExW(0, WC_LINK, wszRel,
+            WS_CHILD|WS_VISIBLE|WS_TABSTOP,
+            X0, 228, W_CT, 20, hWnd,
+            reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_LINK_REL)),
+            s_pd->hInst, nullptr);
+        SendMessageW(hLinkRel, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
+
+        // -- Bottom separator (y=256) --
         CreateWindowExW(0, L"STATIC", L"",
             WS_CHILD|WS_VISIBLE|SS_ETCHEDHORZ,
-            0, 222, 420, 2, hWnd,
+            0, 256, 420, 2, hWnd,
             reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_SEP)),
             s_pd->hInst, nullptr);
 
-        // -- OK button (centered, y=232) --
+        // -- "Check for Updates" button (left, y=266) --
+        HWND hChk = CreateWindowExW(0, L"BUTTON",
+            T(L"Auf Updates prüfen", L"Check for Updates"),
+            WS_CHILD|WS_VISIBLE|WS_TABSTOP,
+            X0, 266, 160, 28, hWnd,
+            reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_ABT_CHECKUPDATE)),
+            s_pd->hInst, nullptr);
+        SendMessageW(hChk, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
+
+        // -- OK button (right, y=266) --
         HWND hOK = CreateWindowExW(0, L"BUTTON",
             T(L"OK", L"OK"),
             WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,
-            165, 232, 90, 28, hWnd,
+            314, 266, 90, 28, hWnd,
             reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDOK)),
             s_pd->hInst, nullptr);
         SendMessageW(hOK, WM_SETFONT, reinterpret_cast<WPARAM>(s_fonts.hNormal), TRUE);
@@ -3669,7 +3711,10 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
     case WM_NOTIFY:
     {
         auto* pNM = reinterpret_cast<NMHDR*>(lParam);
-        if (pNM->idFrom == IDC_ABT_LINK && pNM->code == NM_CLICK)
+        if (pNM->code == NM_CLICK &&
+            (pNM->idFrom == IDC_ABT_LINK ||
+             pNM->idFrom == IDC_ABT_LINK_CL ||
+             pNM->idFrom == IDC_ABT_LINK_REL))
         {
             auto* pLink = reinterpret_cast<NMLINK*>(lParam);
             ShellExecuteW(nullptr, L"open", pLink->item.szUrl,
@@ -3684,6 +3729,13 @@ static LRESULT CALLBACK _AboutWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
         {
             if (s_pd) EnableWindow(s_pd->hParent, TRUE);
             DestroyWindow(hWnd);
+        }
+        if (LOWORD(wParam) == IDC_ABT_CHECKUPDATE && s_pd)
+        {
+            PostMessageW(s_pd->hParent, WM_COMMAND, MAKEWPARAM(IDM_CHECK_NOW, 0), 0);
+            EnableWindow(GetDlgItem(hWnd, IDC_ABT_CHECKUPDATE), FALSE);
+            SetWindowTextW(GetDlgItem(hWnd, IDC_ABT_CHECKUPDATE),
+                T(L"Prüfung läuft...", L"Checking..."));
         }
         return 0;
 
@@ -3711,7 +3763,7 @@ void WireGuardTrayApp::_ShowAboutDialog()
     RegisterClassExW(&wc);
 
     // Fixed dialog size (non-resizable)
-    const int W = 420, H = 272;
+    const int W = 420, H = 304;
     RECT rcAdj = { 0, 0, W, H };
     AdjustWindowRectEx(&rcAdj, WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU, FALSE, WS_EX_DLGMODALFRAME);
     int wW = rcAdj.right  - rcAdj.left;
@@ -3749,26 +3801,42 @@ void WireGuardTrayApp::_ShowAboutDialog()
 }
 
 
-void WireGuardTrayApp::_StartUpdateCheckThread()
+void WireGuardTrayApp::_StartUpdateCheckThread(bool bImmediate)
 {
-    if (_hUpdateThread) return;  // läuft bereits
-    _hUpdateStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (!_hUpdateStop) return;
+    if (_hUpdateThread)
+    {
+        if (bImmediate && _hUpdateNow) SetEvent(_hUpdateNow);
+        return;
+    }
+    // bImmediate: pre-signal the event so the thread skips the 10-min delay
+    _hUpdateNow  = CreateEventW(nullptr, FALSE, bImmediate ? TRUE : FALSE, nullptr);
+    _hUpdateStop = CreateEventW(nullptr, TRUE,  FALSE, nullptr);
+    if (!_hUpdateStop || !_hUpdateNow)
+    {
+        if (_hUpdateStop) { CloseHandle(_hUpdateStop); _hUpdateStop = nullptr; }
+        if (_hUpdateNow)  { CloseHandle(_hUpdateNow);  _hUpdateNow  = nullptr; }
+        return;
+    }
     _hUpdateThread = CreateThread(nullptr, 0, _UpdateCheckThread, this, 0, nullptr);
-    if (!_hUpdateThread) { CloseHandle(_hUpdateStop); _hUpdateStop = nullptr; }
+    if (!_hUpdateThread)
+    {
+        CloseHandle(_hUpdateStop); _hUpdateStop = nullptr;
+        CloseHandle(_hUpdateNow);  _hUpdateNow  = nullptr;
+    }
     else LOG_DEBUG(L"UpdateCheck: thread started");
 }
 
 void WireGuardTrayApp::_StopUpdateCheckThread()
 {
-    if (_hUpdateStop)  SetEvent(_hUpdateStop);
+    if (_hUpdateStop) SetEvent(_hUpdateStop);
     if (_hUpdateThread)
     {
         WaitForSingleObject(_hUpdateThread, 5000);
         CloseHandle(_hUpdateThread);
         _hUpdateThread = nullptr;
     }
-    if (_hUpdateStop)  { CloseHandle(_hUpdateStop); _hUpdateStop = nullptr; }
+    if (_hUpdateStop) { CloseHandle(_hUpdateStop); _hUpdateStop = nullptr; }
+    if (_hUpdateNow)  { CloseHandle(_hUpdateNow);  _hUpdateNow  = nullptr; }
 }
 
 // Hilfsfunktion: JSON-String-Wert extrahieren ("key":"value")
@@ -3809,12 +3877,15 @@ DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
 {
     WireGuardTrayApp* pApp = static_cast<WireGuardTrayApp*>(lpParam);
 
-    // 10 Minuten warten (in 1-Sekunden-Schritten für schnellen Stop)
+    // 10-minute startup delay; _hUpdateNow skips it, _hUpdateStop aborts
     const DWORD WAIT_TOTAL_MS = 10 * 60 * 1000;
+    HANDLE hWait[2] = { pApp->_hUpdateStop, pApp->_hUpdateNow };
     DWORD dwWaited = 0;
     while (dwWaited < WAIT_TOTAL_MS)
     {
-        if (WaitForSingleObject(pApp->_hUpdateStop, 1000) != WAIT_TIMEOUT) return 0;
+        DWORD dw = WaitForMultipleObjects(2, hWait, FALSE, 1000);
+        if (dw == WAIT_OBJECT_0)     return 0;  // stop requested
+        if (dw == WAIT_OBJECT_0 + 1) break;     // immediate check requested
         dwWaited += 1000;
     }
 

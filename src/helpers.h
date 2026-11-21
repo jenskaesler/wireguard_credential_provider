@@ -67,6 +67,8 @@
 #define WGCP_REG_KEY          L"SOFTWARE\\Jens Kaesler\\WireGuard Credential Provider"
 #define WGCP_REG_UNINSTALL    L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\WireGuard Credential Provider"
 #define WGCP_GITHUB_URL       L"https://github.com/jenskaesler/wireguard_credential_provider"
+#define WGCP_CHANGELOG_URL    L"https://github.com/jenskaesler/wireguard_credential_provider/blob/main/CHANGELOG.md"
+#define WGCP_RELEASES_URL     L"https://github.com/jenskaesler/wireguard_credential_provider/releases"
 #define WGCP_VERSION_FALLBACK L"(unbekannt)"
 #define WGCP_REG_EXEPATH      L"ExePath"
 #define WGCP_REG_WGEXEPATH              L"WgExePath"

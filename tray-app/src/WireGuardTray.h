@@ -87,6 +87,7 @@
 #define IDM_OPEN_YKMANAGER  404
 #define IDM_ABOUT           406
 #define IDM_UPDATE_CHECK    407
+#define IDM_CHECK_NOW       408
 #define IDM_EXIT            400
 
 #define WGCP_TRAY_CLASS     L"WireGuardCPTrayClass"
@@ -163,11 +164,12 @@ private:
     WCHAR _wszYkMgrPath[MAX_PATH];  // path found during menu build
     void _OpenConfigDir();
     void _ShowAboutDialog();
-    void _StartUpdateCheckThread();
+    void _StartUpdateCheckThread(bool bImmediate = false);
     void _StopUpdateCheckThread();
     static DWORD WINAPI _UpdateCheckThread(LPVOID lpParam);
     HANDLE _hUpdateThread;
     HANDLE _hUpdateStop;
+    HANDLE _hUpdateNow;
     void _CheckAndRemoveWireGuardShortcut();
 
     // WireGuard UI Watcher
