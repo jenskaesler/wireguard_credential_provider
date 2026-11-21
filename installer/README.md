@@ -158,6 +158,7 @@ The installer sets the following values:
 | `HandshakeTimeoutSec` | REG_SZ | Disconnect tunnel if handshake is older than N seconds (`"180"`) |
 | `AutoUpdateCheck` | REG_DWORD | Check GitHub for new releases on startup (`1`=on, `0`=off, default: `1`) |
 | `AutoUpdateCheckVisible` | REG_DWORD | Show update-check UI in tray menu and About dialog (`1`=show, `0`=hide, default: `1`) |
+| `AutoUpdateCheckInterval` | REG_DWORD | Minutes to wait before the first update check after startup (default: `5`) |
 
 `SmartcardEnabled` and `SmartcardCertThumbprint` are set by `Setup-YubiKey.ps1`.
 

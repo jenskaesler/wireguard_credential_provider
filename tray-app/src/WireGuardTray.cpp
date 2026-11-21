@@ -66,8 +66,9 @@ WireGuardTrayApp::WireGuardTrayApp()
     ZeroMemory(_wszPin,            sizeof(_wszPin));
     ZeroMemory(_wszScStatusMsg,    sizeof(_wszScStatusMsg));
     ZeroMemory(_wszYkSerial,       sizeof(_wszYkSerial));
-    _bAutoUpdateCheck        = false;
-    _bAutoUpdateCheckVisible = true;
+    _bAutoUpdateCheck           = false;
+    _bAutoUpdateCheckVisible    = true;
+    _dwUpdateCheckIntervalMin   = 5;
     _bUpdateBalloonActive    = false;
     ZeroMemory(_wszUpdateUrl, sizeof(_wszUpdateUrl));
     _hUpdateThread = nullptr;
@@ -195,8 +196,9 @@ void WireGuardTrayApp::_LoadConfig()
         ReadRegString(hKey, WGCP_REG_EXEPATH,   _wszExePath,   MAX_PATH_WGCP, WGCP_DEFAULT_EXEPATH);
         ReadRegString(hKey, WGCP_REG_WGEXEPATH, _wszWgExePath, MAX_PATH_WGCP, WGCP_DEFAULT_WGEXEPATH);
         _dwHandshakeTimeoutSec = ReadRegDword(hKey, WGCP_REG_HANDSHAKE_TIMEOUT_SEC, 0);
-        _bAutoUpdateCheck        = (ReadRegDword(hKey, L"AutoUpdateCheck",        1) != 0);
-        _bAutoUpdateCheckVisible = (ReadRegDword(hKey, L"AutoUpdateCheckVisible", 1) != 0);
+        _bAutoUpdateCheck           = (ReadRegDword(hKey, L"AutoUpdateCheck",          1) != 0);
+        _bAutoUpdateCheckVisible    = (ReadRegDword(hKey, L"AutoUpdateCheckVisible",   1) != 0);
+        _dwUpdateCheckIntervalMin   =  ReadRegDword(hKey, L"AutoUpdateCheckInterval",  5);
         RegCloseKey(hKey);
         LOG_DEBUG(L"Tray: Config loaded from registry");
     }
@@ -3885,8 +3887,8 @@ DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
 {
     WireGuardTrayApp* pApp = static_cast<WireGuardTrayApp*>(lpParam);
 
-    // 10-minute startup delay; _hUpdateNow skips it, _hUpdateStop aborts
-    const DWORD WAIT_TOTAL_MS = 10 * 60 * 1000;
+    // Configurable startup delay (AutoUpdateCheckInterval minutes); _hUpdateNow skips it
+    const DWORD WAIT_TOTAL_MS = pApp->_dwUpdateCheckIntervalMin * 60 * 1000;
     HANDLE hWait[2] = { pApp->_hUpdateStop, pApp->_hUpdateNow };
     DWORD dwWaited = 0;
     while (dwWaited < WAIT_TOTAL_MS)
