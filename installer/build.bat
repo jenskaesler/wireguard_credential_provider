@@ -137,10 +137,7 @@ for %%A in ("%OUT_FILE%") do (
 :: ---- Generate checksums (sha256sum format for GitHub releases) ----
 echo.
 echo [4/4] Generating checksums.txt ...
-powershell -NoProfile -Command ^
-  "$hash = (Get-FileHash '%OUT_FILE%' -Algorithm SHA256).Hash.ToLower(); ^
-   $line = $hash + '  !NAME!'; ^
-   Set-Content -Path '%CHECKSUMS_FILE%' -Value $line -Encoding UTF8NoBOM" >nul 2>&1
+powershell -NoProfile -Command "$hash=(Get-FileHash '%OUT_FILE%' -Algorithm SHA256).Hash.ToLower();Set-Content -Path '%CHECKSUMS_FILE%' -Value ($hash+'  !NAME!') -Encoding UTF8NoBOM" >nul 2>&1
 if errorlevel 1 (
     echo [WARNING] Could not create checksums.txt.
 ) else (
