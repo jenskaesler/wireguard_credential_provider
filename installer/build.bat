@@ -54,6 +54,19 @@ if "!MAKENSIS!"=="" (
 )
 echo [OK] NSIS found: !MAKENSIS!
 
+:: ---- Version bump (interactive) ----
+echo.
+echo [0/4] Version bump ...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\bump-version.ps1"
+if errorlevel 10 (
+    echo.
+    echo [INFO] Rebuild the solution in Visual Studio ^(Release ^| x64^), then run build.bat again.
+    echo.
+    pause
+    exit /b 0
+)
+if errorlevel 1 goto :error
+
 :: ---- Verify build outputs ----
 if not exist "%DLL_SRC%" (
     echo [ERROR] DLL not found:
