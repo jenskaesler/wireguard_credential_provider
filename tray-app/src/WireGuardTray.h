@@ -110,6 +110,7 @@ public:
 
     bool Init(HINSTANCE hInst);
     int  Run();
+    void _StartUpdateCheckThread(bool bImmediate = false);  // public: called from _AboutWndProc
 
 private:
     HINSTANCE           _hInst;
@@ -172,7 +173,6 @@ private:
     void _ShowAboutDialog();
     void _ShowUpdatePopup();
     static LRESULT CALLBACK _UpdatePopupWndProc(HWND, UINT, WPARAM, LPARAM);
-    void _StartUpdateCheckThread(bool bImmediate = false);
     void _StopUpdateCheckThread();
     static DWORD WINAPI _UpdateCheckThread(LPVOID lpParam);
     HANDLE _hUpdateThread;
