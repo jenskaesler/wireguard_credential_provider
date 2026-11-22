@@ -7,6 +7,17 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **`bump-version.ps1` commits, tags and pushes** — After updating the version files the
+  script commits them (`chore: bump version to X`), creates the tag `vX` on that commit
+  and pushes commit and tag to `origin`. It aborts before changing any file if the tag
+  already exists. This ensures the release tag always contains the new version number.
+
+---
+
 ## [2026.11.3] - 2026-11-22
 
 ### Fixed

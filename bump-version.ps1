@@ -17,6 +17,9 @@
       tray-app/resources/WireGuardTray.rc
       README.md  (version badge)
 
+    Afterwards the three files are committed ("chore: bump version to X"),
+    tagged vX and both commit and tag are pushed to origin.
+
 .PARAMETER Patch
     Increment the build index (N+1), keep year and month.
 
@@ -125,6 +128,12 @@ if ($interactive) {
     if ($confirm.Trim().ToUpper() -ne 'Y') { Write-Host "  Cancelled."; exit 0 }
 }
 
+# --- Git pre-check: abort before touching files if the tag already exists ---
+$tag = "v$newVer"
+function Invoke-Git { & git -C $Root @args; if ($LASTEXITCODE -ne 0) { Write-Error "git $args failed (exit $LASTEXITCODE)"; exit 1 } }
+& git -C $Root rev-parse -q --verify "refs/tags/$tag" *> $null
+if ($LASTEXITCODE -eq 0) { Write-Error "Tag $tag already exists."; exit 1 }
+
 # --- Helper: read file, replace pattern, write back (preserves BOM) ---
 function Update-FileRegex($path, $pattern, $replacement) {
     $bytes  = [System.IO.File]::ReadAllBytes($path)
@@ -153,11 +162,19 @@ Write-Host "  [OK] tray-app\resources\WireGuardTray.rc"
 Update-FileRegex $ReadmeMd '(Version-)[\d.]+(-blue)' "`${1}$newVer`${2}"
 Write-Host "  [OK] README.md"
 
+# --- Commit, tag and push (tag must sit on the bump commit) ---
+Invoke-Git commit -q -m "chore: bump version to $newVer" -- resources/WireGuardCredentialProvider.rc tray-app/resources/WireGuardTray.rc README.md
+Invoke-Git tag $tag
+Invoke-Git push -q
+Invoke-Git push -q origin $tag
+Write-Host "  [OK] committed, tagged $tag and pushed"
+
 Write-Host ""
 Write-Host "  Version bumped: $curVer -> $newVer"
 Write-Host ""
 Write-Host "  Next steps:"
 Write-Host "    1. Rebuild the solution in Visual Studio (Release | x64)"
 Write-Host "    2. Run build.bat again to create the installer"
+Write-Host "    3. Create the GitHub release for $tag and upload the installer"
 Write-Host ""
 exit 10
