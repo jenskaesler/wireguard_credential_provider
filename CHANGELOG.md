@@ -7,6 +7,37 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.11.2] - 2026-11-22
+
+### Changed
+
+- **Update notification: persistent popup instead of balloon tip** — The Windows balloon
+  notification (auto-dismissed after 15 s) has been replaced by a custom popup window
+  that stays visible until the user acts. Clicking the popup opens the GitHub release
+  page; the X button closes it without opening anything.
+
+- **Update popup: dark / light mode** — The popup follows the Windows app theme
+  (`AppsUseLightTheme`) and reacts live to theme changes.
+
+### Fixed
+
+- **About dialog: Check for Updates button had no effect** — The button posted
+  `IDM_CHECK_NOW` to the main window, which is disabled while the modal About dialog is
+  open, so the message was not processed. The dialog now starts the update check
+  directly.
+
+- **About dialog: emoji in Changelog / Releases links** — The legacy Win32 SysLink
+  control does not render emoji; the 📋 / 🚀 prefixes have been removed from the labels.
+
+### Documentation
+
+- **`docs/PRIVACY.md`** — Updated for the configurable startup delay
+  (`AutoUpdateCheckInterval`, default 5 minutes), the manual *Check for Updates* button,
+  the new popup notification, and the correct silent-install parameter `/UPDATECHECK=0`
+  (previously documented as the non-existent `/NOUPDATECHECK`).
+
+---
+
 ## [2026.11.1] - 2026-11-21
 
 ### Added

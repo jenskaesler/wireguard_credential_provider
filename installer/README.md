@@ -87,6 +87,8 @@ The installer is update-safe:
   next Winlogon cycle (screen lock or next login).
 - **Registry**: User settings (SmartcardEnabled, Thumbprint, etc.) are not overwritten
   during updates. `HandshakeTimeoutSec` is set to `180` if the value is `0` or empty.
+  `AutoUpdateCheck` (`1`), `AutoUpdateCheckVisible` (`1`) and `AutoUpdateCheckInterval` (`5`)
+  are only written with their defaults if they do not exist yet.
 - **Silent parameters** (`/HANDSHAKE=`, `/LOGLEVEL=`, etc.) always overwrite — including
   during updates.
 

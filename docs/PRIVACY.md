@@ -30,27 +30,33 @@ No personal data, device identifiers, usernames, or configuration details are se
 
 **When it runs:**
 
-10 minutes after the tray application starts, a single HTTPS request is made to:
+After the tray application starts, it waits for the configured delay
+(`AutoUpdateCheckInterval`, default: 5 minutes) and then makes a single HTTPS request to:
 
 ```
 GET https://api.github.com/repos/jenskaesler/wireguard_credential_provider/releases/latest
 ```
 
-If a newer version is available, a Windows balloon notification is shown. No background
-communication takes place after that.
+The same request is made when the user clicks *Check for Updates* in the About dialog.
+
+If a newer version is available, a notification popup is shown. Clicking it opens the
+GitHub release page in the default browser. No background communication takes place
+after that.
 
 **GitHub's privacy policy** applies to the connection to `api.github.com`:  
 https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement
 
 **How to disable:**
 
-The update check is controlled by a registry value and is disabled by default for silent
-installs with the `/NOUPDATECHECK` parameter. Administrators can disable it via registry
-or Group Policy:
+The update check is enabled by default. It can be disabled during a silent install with
+the `/UPDATECHECK=0` parameter, or by administrators via registry or Group Policy.
+`AutoUpdateCheckVisible=0` additionally hides the update-check UI (tray menu toggle and
+*Check for Updates* button):
 
 ```reg
 [HKEY_LOCAL_MACHINE\SOFTWARE\Jens Kaesler\WireGuard Credential Provider]
 "AutoUpdateCheck"=dword:00000000
+"AutoUpdateCheckVisible"=dword:00000000
 ```
 
 ---
