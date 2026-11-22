@@ -7,6 +7,32 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
+## [2026.11.3] - 2026-11-22
+
+### Fixed
+
+- **Installer: shutdown service was never stopped during install / upgrade** — The
+  `SimpleSC` plugin in the NSIS `x86-unicode` folder was the ANSI build, so the
+  service name reached the plugin garbled and `StopService` failed silently. Killing
+  the process via `nsProcess` does not work for a SYSTEM service either, so
+  `WireGuardShutdownService.exe` in System32 stayed locked and robocopy retried
+  forever (error 32, 30-second waits). The installer now stops the service with the
+  built-in `net stop`, which waits until the service has stopped; the exit code is
+  written to the install log.
+
+- **Installer: robocopy no longer hangs on a locked file** — Both robocopy calls use
+  `/R:5 /W:2` instead of the default of one million retries.
+
+- **Installer: German umlauts** — German translations now use proper umlauts
+  (*Lädt*, *Benötigt*, *Möchten*, *durchführen*, *öffnen*, *Prüfe*) instead of
+  transcriptions; the script is saved as UTF-8 with BOM.
+
+### Removed
+
+- **`SimpleSC` NSIS plugin dependency** — No longer required to build the installer.
+
+---
+
 ## [2026.11.2] - 2026-11-22
 
 ### Changed

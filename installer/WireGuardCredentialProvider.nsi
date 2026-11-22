@@ -1,10 +1,9 @@
-; ============================================================
+﻿; ============================================================
 ; WireGuard Credential Provider - NSIS Installer
 ; ============================================================
 ; Anforderungen:
 ;   - NSIS 3.x
 ;   - nsProcess Plugin  (https://nsis.sourceforge.io/NsProcess_plugin)
-;   - SimpleSC Plugin   (https://nsis.sourceforge.io/NSIS_Simple_Service_Plugin)
 ;   - Inetc Plugin      (https://nsis.sourceforge.io/Inetc_plug-in)
 ;   - MUI2 (in NSIS enthalten)
 ;
@@ -140,21 +139,21 @@ LangString GRP_WGCP             ${LANG_GERMAN} "WireGuard Credential Provider"
 LangString GRP_YUBIKEY          ${LANG_GERMAN} "YubiKey Tools (optional)"
 LangString DESC_SecMain         ${LANG_GERMAN} "Installiert den WireGuard Credential Provider, den Tray-Dienst und den Shutdown-Dienst. WireGuard wird automatisch installiert falls nicht vorhanden."
 LangString DESC_SecConfig       ${LANG_GERMAN} "Schreibt die Standard-Konfiguration in die Registry. Bestehende Einstellungen bleiben bei Updates erhalten."
-LangString DESC_SecYKAuth       ${LANG_GERMAN} "Laedt den YubiKey Authenticator (v7.4.1) herunter und installiert ihn. Benoetigt eine Internetverbindung."
-LangString DESC_SecYKMini       ${LANG_GERMAN} "Laedt den YubiKey Minidriver (neueste Version) herunter und installiert ihn. Benoetigt eine Internetverbindung."
-LangString DESC_SecYKMgrCLI     ${LANG_GERMAN} "Laedt den YubiKey Manager CLI - ykman (v5.9.2) herunter und installiert ihn. Benoetigt eine Internetverbindung."
+LangString DESC_SecYKAuth       ${LANG_GERMAN} "Lädt den YubiKey Authenticator (v7.4.1) herunter und installiert ihn. Benötigt eine Internetverbindung."
+LangString DESC_SecYKMini       ${LANG_GERMAN} "Lädt den YubiKey Minidriver (neueste Version) herunter und installiert ihn. Benötigt eine Internetverbindung."
+LangString DESC_SecYKMgrCLI     ${LANG_GERMAN} "Lädt den YubiKey Manager CLI - ykman (v5.9.2) herunter und installiert ihn. Benötigt eine Internetverbindung."
 LangString DESC_SecUninstall    ${LANG_GERMAN} "Entfernt den Credential Provider, den Tray-Dienst und den Shutdown-Dienst vom System."
 LangString DESC_SecUninstallCfg ${LANG_GERMAN} "Entfernt alle Registry-Einstellungen. WireGuard-Tunnel-Konfigurationen bleiben erhalten."
 LangString ERR_NO_64BIT         ${LANG_GERMAN} "Dieses Installationsprogramm erfordert ein 64-Bit-Betriebssystem."
-LangString MSG_UPGRADE          ${LANG_GERMAN} "${APPNAME} ist bereits in Version $R0 installiert.$\n$\nMoechten Sie ein Update auf Version ${VERSION_DISP} durchfuehren?$\n$\nDie bestehende Konfiguration bleibt erhalten."
+LangString MSG_UPGRADE          ${LANG_GERMAN} "${APPNAME} ist bereits in Version $R0 installiert.$\n$\nMöchten Sie ein Update auf Version ${VERSION_DISP} durchführen?$\n$\nDie bestehende Konfiguration bleibt erhalten."
 LangString MSG_SVC_STOP         ${LANG_GERMAN} "Stoppe ${SVC_NAME}-Dienst..."
 LangString MSG_SVC_START        ${LANG_GERMAN} "Starte ${SVC_NAME}-Dienst..."
 LangString MSG_REGSVR           ${LANG_GERMAN} "Registriere Credential Provider in der Registry..."
 LangString MSG_UNREG            ${LANG_GERMAN} "Deregistriere Credential Provider..."
-LangString MSG_SHOW_README      ${LANG_GERMAN} "README-Datei oeffnen"
+LangString MSG_SHOW_README      ${LANG_GERMAN} "README-Datei öffnen"
 LangString MSG_SETTINGS         ${LANG_GERMAN} "Einstellungen"
 LangString MSG_UNINSTALL_SETTINGS ${LANG_GERMAN} "Einstellungen entfernen"
-LangString MSG_WG_CHECK         ${LANG_GERMAN} "Pruefe WireGuard-Installation..."
+LangString MSG_WG_CHECK         ${LANG_GERMAN} "Prüfe WireGuard-Installation..."
 LangString MSG_WG_FOUND         ${LANG_GERMAN} "WireGuard ist bereits installiert."
 LangString MSG_WG_DL            ${LANG_GERMAN} "WireGuard nicht gefunden - lade Installer herunter..."
 LangString MSG_WG_INST          ${LANG_GERMAN} "Installiere WireGuard (silent)..."
@@ -345,7 +344,7 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
         ; DLL nach System32 (robocopy umgeht WOW64-Umleitung)
         ; -------------------------------------------------------
         DetailPrint "Kopiere DLL nach $9..."
-        ExecWait 'robocopy.exe "$INSTDIR" "$9" WireGuardCredentialProvider.dll /IS /IT /NJH /NJS /NFL /NDL'
+        ExecWait 'robocopy.exe "$INSTDIR" "$9" WireGuardCredentialProvider.dll /IS /IT /R:5 /W:2 /NJH /NJS /NFL /NDL'
 
         ExecWait 'cmd.exe /c if not exist "$9\WireGuardCredentialProvider.dll" exit 1' $R8
         ${If} $R8 != 0
@@ -370,7 +369,7 @@ SectionGroup /e "$(GRP_WGCP)" SecGrpInstall
         ; Shutdown-Dienst installieren
         ; -------------------------------------------------------
         DetailPrint "Installiere Shutdown-Dienst..."
-        ExecWait 'robocopy.exe "$INSTDIR" "$9" WireGuardShutdownService.exe /NJH /NJS /NFL /NDL'
+        ExecWait 'robocopy.exe "$INSTDIR" "$9" WireGuardShutdownService.exe /R:5 /W:2 /NJH /NJS /NFL /NDL'
         ExecWait '"$9\WireGuardShutdownService.exe" /install'
         DetailPrint "$(MSG_SVC_START)"
 
@@ -888,6 +887,10 @@ Function CheckUpgrade
 FunctionEnd
 
 Function StopService
-    SimpleSC::StopService "${SVC_NAME}" 1 30
+    ; net stop waits synchronously until the service is stopped (no plugin needed;
+    ; the installed SimpleSC.dll in x86-unicode was the ANSI build and failed silently)
+    nsExec::ExecToLog 'net.exe stop "${SVC_NAME}"'
+    Pop $R0
+    DetailPrint "net stop ${SVC_NAME}: Exit-Code $R0"
     ClearErrors
 FunctionEnd

@@ -130,7 +130,6 @@ if errorlevel 1 (
     echo [ERROR] NSIS compilation failed.
     echo         Check that all plugins are installed:
     echo           - nsProcess:  https://nsis.sourceforge.io/NsProcess_plugin
-    echo           - SimpleSC:   https://nsis.sourceforge.io/NSIS_Simple_Service_Plugin
     goto :error
 )
 

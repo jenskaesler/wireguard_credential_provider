@@ -91,7 +91,7 @@ Authentication flow:
 | Visual Studio | 2022 or newer (toolset v145) |
 | Windows SDK | 10.0 |
 | C++ Workload | Desktop development with C++ |
-| NSIS | 3.x with **inetc**, **nsProcess**, **SimpleSC** plugins |
+| NSIS | 3.x with **inetc**, **nsProcess** plugins |
 
 ---
 
