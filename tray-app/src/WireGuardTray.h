@@ -90,6 +90,12 @@
 #define IDM_CHECK_NOW       408
 #define IDM_EXIT            400
 #define WM_SHOW_UPDATE_POPUP (WM_APP + 1)  // lParam unused; strings stored in app members
+#define WM_UPDATE_CHECK_DONE (WM_APP + 2)  // wParam = UPD_NONE / UPD_AVAILABLE / UPD_ERROR
+enum { UPD_NONE = 0, UPD_AVAILABLE = 1, UPD_ERROR = 2 };
+
+// About dialog control IDs
+enum { IDC_ABT_ICON=10, IDC_ABT_VER, IDC_ABT_CPY, IDC_ABT_DESC, IDC_ABT_LINK, IDC_ABT_SEP,
+       IDC_ABT_LINK_CL, IDC_ABT_LINK_REL, IDC_ABT_CHECKUPDATE };
 
 #define WGCP_TRAY_CLASS     L"WireGuardCPTrayClass"
 #define WGCP_TRAY_MUTEX     L"WireGuardCPTray_SingleInstance"
@@ -142,6 +148,8 @@ private:
     WCHAR               _wszUpdateTitle[128];  // Popup-Titel (z.B. "Update verfügbar")
     WCHAR               _wszUpdateMsg[256];    // Popup-Text
     HWND                _hUpdatePopup;         // Handle des Update-Popup-Fensters (NULL = kein Popup)
+    HWND                _hAboutWnd;            // offener About-Dialog (Button nach Prüfung zurücksetzen)
+    bool                _bUpdateManual;        // manuelle Prüfung → auch "kein Update"/Fehler melden
 
     static LRESULT CALLBACK _WndProc(HWND, UINT, WPARAM, LPARAM);
     static INT_PTR CALLBACK _PinDlgProc(HWND, UINT, WPARAM, LPARAM);
@@ -175,6 +183,7 @@ private:
     static LRESULT CALLBACK _UpdatePopupWndProc(HWND, UINT, WPARAM, LPARAM);
     void _StopUpdateCheckThread();
     static DWORD WINAPI _UpdateCheckThread(LPVOID lpParam);
+    static int _RunUpdateCheck(WireGuardTrayApp* pApp);
     HANDLE _hUpdateThread;
     HANDLE _hUpdateStop;
     HANDLE _hUpdateNow;

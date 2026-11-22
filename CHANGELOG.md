@@ -7,7 +7,7 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
 
 ---
 
-## [Unreleased]
+## [2026.11.4] - 2026-11-22
 
 ### Changed
 
@@ -15,6 +15,19 @@ Versioning follows the scheme `<Year>.<Month>.<Release>`.
   script commits them (`chore: bump version to X`), creates the tag `vX` on that commit
   and pushes commit and tag to `origin`. It aborts before changing any file if the tag
   already exists. This ensures the release tag always contains the new version number.
+
+### Fixed
+
+- **Check for Updates gave no feedback** — A manual check (About dialog button or tray
+  menu) now always reports its result: the update popup if a newer version exists,
+  otherwise a message box saying the installed version is up to date or that GitHub
+  could not be reached. The About button returns from *Checking…* to *Check for Updates*
+  when the check finishes.
+
+- **Manual update check did nothing after the startup check** — Once the automatic
+  startup check had finished, its thread handle was never released, so every later
+  manual check only signalled an event nobody was waiting on. A finished thread is now
+  cleaned up and a new check is started.
 
 ---
 

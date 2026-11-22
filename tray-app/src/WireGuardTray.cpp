@@ -15,6 +15,8 @@
 
 static WireGuardTrayApp* g_pApp = nullptr;
 
+static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf);  // defined near the About dialog
+
 // ---------------------------------------------------------------------------
 // Language detection – returns true if system UI is German
 // ---------------------------------------------------------------------------
@@ -74,6 +76,8 @@ WireGuardTrayApp::WireGuardTrayApp()
     ZeroMemory(_wszUpdateTitle, sizeof(_wszUpdateTitle));
     ZeroMemory(_wszUpdateMsg,   sizeof(_wszUpdateMsg));
     _hUpdatePopup               = nullptr;
+    _hAboutWnd                  = nullptr;
+    _bUpdateManual              = false;
     _hUpdateThread = nullptr;
     _hUpdateStop   = nullptr;
     _hUpdateNow    = nullptr;
@@ -1526,8 +1530,7 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
         }
         if (uCmd == IDM_CHECK_NOW)
         {
-            if (_hUpdateNow) SetEvent(_hUpdateNow);
-            else _StartUpdateCheckThread(true);
+            _StartUpdateCheckThread(true);
             return 0;
         }
         if (uCmd == IDM_EXIT)
@@ -1605,6 +1608,35 @@ LRESULT WireGuardTrayApp::_HandleMessage(HWND hWnd, UINT msg,
         _bUpdateBalloonActive = true;
         _ShowUpdatePopup();
         return 0;
+
+    case WM_UPDATE_CHECK_DONE:
+    {
+        HWND hAbout = (_hAboutWnd && IsWindow(_hAboutWnd)) ? _hAboutWnd : nullptr;
+        if (hAbout)
+        {
+            HWND hBtn = GetDlgItem(hAbout, IDC_ABT_CHECKUPDATE);
+            SetWindowTextW(hBtn, T(L"Auf Updates prüfen", L"Check for Updates"));
+            EnableWindow(hBtn, TRUE);
+        }
+        const bool bManual = _bUpdateManual;
+        _bUpdateManual = false;
+        if (bManual && wParam != UPD_AVAILABLE)  // UPD_AVAILABLE already shows the popup
+        {
+            WCHAR wszVer[64] = {}, wszMsg[256] = {};
+            _GetDisplayVersion(wszVer, ARRAYSIZE(wszVer));
+            if (wParam == UPD_NONE)
+                StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg),
+                    T(L"Sie verwenden bereits die neueste Version (%s).",
+                      L"You are already using the latest version (%s)."), wszVer);
+            else
+                StringCchCopyW(wszMsg, ARRAYSIZE(wszMsg),
+                    T(L"Die Update-Prüfung ist fehlgeschlagen. GitHub ist nicht erreichbar.\nDetails stehen im Log.",
+                      L"The update check failed. GitHub could not be reached.\nSee the log for details."));
+            MessageBoxW(hAbout, wszMsg, L"WireGuard Credential Provider",
+                MB_OK | (wParam == UPD_NONE ? MB_ICONINFORMATION : MB_ICONWARNING) | (hAbout ? 0 : MB_TOPMOST));
+        }
+        return 0;
+    }
 
     case WM_DESTROY:
         if (_hUpdatePopup) { DestroyWindow(_hUpdatePopup); _hUpdatePopup = nullptr; }
@@ -3500,9 +3532,7 @@ static void _GetDisplayVersion(PWSTR pwszBuf, int cchBuf)
 //   [224]     OK-Button (zentriert)
 // ---------------------------------------------------------------------------
 
-// Control-IDs (lokale Konstanten)
-enum { IDC_ABT_ICON=10, IDC_ABT_VER, IDC_ABT_CPY, IDC_ABT_DESC, IDC_ABT_LINK, IDC_ABT_SEP,
-       IDC_ABT_LINK_CL, IDC_ABT_LINK_REL, IDC_ABT_CHECKUPDATE };
+// Control-IDs: IDC_ABT_* in WireGuardTray.h (also used by WM_UPDATE_CHECK_DONE)
 
 struct AboutDlgData { PCWSTR ver; PCWSTR url; HWND hParent; HINSTANCE hInst; bool bUpdateVisible;
                       WireGuardTrayApp* pApp; };
@@ -3806,6 +3836,7 @@ void WireGuardTrayApp::_ShowAboutDialog()
         _hWnd, nullptr, _hInst, &dlgData);
 
     if (!hAbout) { EnableWindow(_hWnd, TRUE); return; }
+    _hAboutWnd = hAbout;
     ShowWindow(hAbout, SW_SHOW);
     UpdateWindow(hAbout);
 
@@ -3818,6 +3849,7 @@ void WireGuardTrayApp::_ShowAboutDialog()
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }
+    _hAboutWnd = nullptr;
     if (m.message == WM_QUIT)
         PostQuitMessage(static_cast<int>(m.wParam));
 }
@@ -3825,6 +3857,10 @@ void WireGuardTrayApp::_ShowAboutDialog()
 
 void WireGuardTrayApp::_StartUpdateCheckThread(bool bImmediate)
 {
+    if (bImmediate) _bUpdateManual = true;  // user asked: report "up to date" / errors too
+    // Thread already finished (e.g. startup check done): release it and start a new one
+    if (_hUpdateThread && WaitForSingleObject(_hUpdateThread, 0) == WAIT_OBJECT_0)
+        _StopUpdateCheckThread();
     if (_hUpdateThread)
     {
         if (bImmediate && _hUpdateNow) SetEvent(_hUpdateNow);
@@ -3911,6 +3947,14 @@ DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
         dwWaited += 1000;
     }
 
+    const int r = _RunUpdateCheck(pApp);
+    PostMessageW(pApp->_hWnd, WM_UPDATE_CHECK_DONE, static_cast<WPARAM>(r), 0);
+    return 0;
+}
+
+// Returns UPD_NONE / UPD_AVAILABLE / UPD_ERROR; posts WM_SHOW_UPDATE_POPUP when newer
+int WireGuardTrayApp::_RunUpdateCheck(WireGuardTrayApp* pApp)
+{
     LOG_DEBUG(L"UpdateCheck: checking GitHub for latest release...");
 
     // --- Installierte Version lesen ---
@@ -3926,12 +3970,12 @@ DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
         L"WireGuardCP-UpdateCheck/1.0",
         WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) { LOG_WARN(L"UpdateCheck: WinHttpOpen failed"); return 0; }
+    if (!hSession) { LOG_WARN(L"UpdateCheck: WinHttpOpen failed"); return UPD_ERROR; }
 
     HINTERNET hConnect = WinHttpConnect(hSession,
         L"api.github.com",
         INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); LOG_WARN(L"UpdateCheck: WinHttpConnect failed"); return 0; }
+    if (!hConnect) { WinHttpCloseHandle(hSession); LOG_WARN(L"UpdateCheck: WinHttpConnect failed"); return UPD_ERROR; }
 
     HINTERNET hRequest = WinHttpOpenRequest(hConnect,
         L"GET",
@@ -3945,7 +3989,7 @@ DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         LOG_WARN(L"UpdateCheck: WinHttpOpenRequest failed");
-        return 0;
+        return UPD_ERROR;
     }
 
     // User-Agent und Accept-Header setzen
@@ -3962,7 +4006,7 @@ DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         LOG_WARN(L"UpdateCheck: HTTP request failed");
-        return 0;
+        return UPD_ERROR;
     }
 
     // HTTP-Status prüfen
@@ -3980,7 +4024,7 @@ DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
-        return 0;
+        return UPD_ERROR;
     }
 
     // Response-Body lesen (max. 64 KB)
@@ -4005,7 +4049,7 @@ DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
     if (!ExtractJsonString(szBody, "\"tag_name\"", szTagName, ARRAYSIZE(szTagName)))
     {
         LOG_WARN(L"UpdateCheck: could not parse tag_name from response");
-        return 0;
+        return UPD_ERROR;
     }
 
     WCHAR wszDbg[128];
@@ -4017,7 +4061,7 @@ DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
     if (!IsNewerVersion(szTagName, szInstalled))
     {
         LOG_DEBUG(L"UpdateCheck: already up to date");
-        return 0;
+        return UPD_NONE;
     }
 
     // --- Release-URL bauen: "v"-Präfix tolerieren ---
@@ -4046,7 +4090,7 @@ DWORD WINAPI WireGuardTrayApp::_UpdateCheckThread(LPVOID lpParam)
     PostMessageW(pApp->_hWnd, WM_SHOW_UPDATE_POPUP, 0, 0);
 
     LOG_DEBUG(L"UpdateCheck: popup requested");
-    return 0;
+    return UPD_AVAILABLE;
 }
 
 // ---------------------------------------------------------------------------
