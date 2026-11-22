@@ -133,6 +133,8 @@ $tag = "v$newVer"
 function Invoke-Git { & git -C $Root @args; if ($LASTEXITCODE -ne 0) { Write-Error "git $args failed (exit $LASTEXITCODE)"; exit 1 } }
 & git -C $Root rev-parse -q --verify "refs/tags/$tag" *> $null
 if ($LASTEXITCODE -eq 0) { Write-Error "Tag $tag already exists."; exit 1 }
+# Uncommitted changes would be missing from the tagged release
+if (& git -C $Root status --porcelain --untracked-files=no) { Write-Error "Uncommitted changes in the working tree. Commit them first."; exit 1 }
 
 # --- Helper: read file, replace pattern, write back (preserves BOM) ---
 function Update-FileRegex($path, $pattern, $replacement) {
